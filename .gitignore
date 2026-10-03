@@ -1,0 +1,7 @@
+# fetched or built, never committed (scripts/fetch.sh gets them back)
+/dl/
+/src/
+/out/
+/build/
+# proprietary Glass firmware blobs
+/firmware/

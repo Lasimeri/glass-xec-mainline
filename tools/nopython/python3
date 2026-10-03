@@ -1,0 +1,4 @@
+#!/bin/sh
+# No Python in this build: any call is logged and fails.
+echo "$(date '+%F %T') python called: $0 $*  (cwd $PWD, parent $PPID)" >> "${NOPYTHON_LOG:-$HOME/glass-xec/out/python-calls.log}"
+exit 1
