@@ -1,0 +1,9 @@
+# busybox init, the Glass XE-C rootfs on the userdata partition.
+::sysinit:/etc/glass/rcS-rootfs
+::respawn:/etc/glass/console uart
+::respawn:/etc/glass/console usb
+::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
+::respawn:/usr/lib/bluetooth/bluetoothd -n
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/sync
+::shutdown:/bin/umount -a -r

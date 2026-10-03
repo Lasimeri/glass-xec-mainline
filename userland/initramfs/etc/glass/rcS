@@ -1,0 +1,33 @@
+#!/bin/sh
+# rcS: the USB link (network 172.16.42.1/24 with a DHCP server for the
+# desktop, and a serial console), then a banner. Runs once at boot.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+log() { echo "glass-rcS: $*" > /dev/kmsg; echo "$*" >> /run/glass/rcS.log; }
+mkdir -p /run/glass /var/lib/misc /etc/dropbear
+ip link set lo up
+
+if ifname=$(/usr/sbin/glass-gadget); then
+    log "usb gadget up, network interface $ifname"
+    ip addr add 172.16.42.1/24 dev "$ifname"
+    ip link set "$ifname" up
+    sed "s/@IF@/$ifname/" /etc/glass/udhcpd.conf.in > /run/glass/udhcpd.conf
+    if command -v udhcpd > /dev/null; then udhcpd /run/glass/udhcpd.conf; else busybox-extras udhcpd /run/glass/udhcpd.conf; fi
+else
+    log "usb gadget failed: see dmesg; the UART console still works"
+fi
+
+# The stock 3.4 kernel only: its panel stays dark until told (the
+# postmarketOS google-glass port's initfs hook).
+p=/sys/devices/platform/omapdss/manager2/panel-notle-dpi
+if [ -d "$p" ]; then
+    echo 1 > "$p/enabled"
+    echo 160 > "$p/brightness"
+    echo 0 > /sys/devices/platform/omapfb/graphics/fb0/blank
+    echo "U:640x360p-312" > /sys/devices/platform/omapfb/graphics/fb0/mode
+    log "stock kernel: notle panel enabled"
+fi
+
+msg="glass: $(uname -r) up. ssh root@172.16.42.1 | serial /dev/ttyACM0 | glass-collect"
+log "$msg"
+for t in /dev/tty0 /dev/ttyS2 /dev/ttyO2; do [ -c "$t" ] && echo "$msg" > "$t" 2> /dev/null; done
+exit 0

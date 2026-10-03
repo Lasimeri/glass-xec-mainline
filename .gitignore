@@ -5,3 +5,4 @@
 /build/
 # proprietary Glass firmware blobs
 /firmware/
+/tools/apk-host/

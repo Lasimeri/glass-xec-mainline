@@ -1,0 +1,249 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Google Glass XE-C, the full image: the safe image plus the eMMC, Wi-Fi and
+ * Bluetooth (BCM4330), the battery gauge, the touchpad, the IMU and the
+ * camera button. Sources as in omap4-glass-xec-common.dtsi ("notle:").
+ *
+ * Not described yet: the display (panel-notle-panel @ I2C4 0x49 behind the
+ * iCE40 FPGA, no mainline driver), the glasshub MCU (I2C4 0x35), the
+ * LTR-506 light sensor (I2C4 0x3a, no mainline driver), audio (TWL6040 and
+ * the ABE), the camera and GPS.
+ */
+#include "omap4-glass-xec-common.dtsi"
+#include <dt-bindings/input/input.h>
+
+/ {
+	/*
+	 * notle: tuna_vwlan (board-notle-wifi.c), 2.0 V switched by WL_RST_N
+	 * (GPIO 43), active high, 70 ms startup; the supply of MMC5.
+	 */
+	vwlan: regulator-vwlan {
+		compatible = "regulator-fixed";
+		regulator-name = "vwlan";
+		regulator-min-microvolt = <2000000>;
+		regulator-max-microvolt = <2000000>;
+		gpio = <&gpio2 11 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <70000>;
+		regulator-always-on;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wlan_pins>;
+	};
+
+	wlan_pwrseq: wlan-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&twl 0>;			/* CLK32KG */
+		clock-names = "ext_clock";
+	};
+
+	/* notle: notle_button_table, KEY_CAMERA on gpio_wk30, active low. */
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&camera_button_pins>;
+
+		button-camera {
+			label = "Camera";
+			gpios = <&gpio1 30 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_CAMERA>;
+			debounce-interval = <5>;
+			wakeup-source;
+		};
+	};
+};
+
+&omap4_pmx_core {
+	pinctrl-0 = <&usb_mux_pins &wl_bt_reg_on_pins>;
+
+	/* notle: mmc[0], MMC2 8-bit, the eMMC. */
+	mmc2_pins: mmc2-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x040, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat0 */
+			OMAP4_IOPAD(0x042, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat1 */
+			OMAP4_IOPAD(0x044, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat2 */
+			OMAP4_IOPAD(0x046, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat3 */
+			OMAP4_IOPAD(0x048, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat4 */
+			OMAP4_IOPAD(0x04a, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat5 */
+			OMAP4_IOPAD(0x04c, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat6 */
+			OMAP4_IOPAD(0x04e, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_dat7 */
+			OMAP4_IOPAD(0x082, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_clk */
+			OMAP4_IOPAD(0x084, PIN_INPUT_PULLUP | MUX_MODE1)	/* sdmmc2_cmd */
+		>;
+	};
+
+	/* notle: mmc[1], "bcm4329" on MMC5, 4-bit SDIO. */
+	mmc5_pins: mmc5-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x148, PIN_INPUT_PULLDOWN | MUX_MODE0)	/* sdmmc5_clk */
+			OMAP4_IOPAD(0x14a, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_cmd */
+			OMAP4_IOPAD(0x14c, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat0 */
+			OMAP4_IOPAD(0x14e, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat1 */
+			OMAP4_IOPAD(0x150, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat2 */
+			OMAP4_IOPAD(0x152, PIN_INPUT_PULLUP | MUX_MODE0)	/* sdmmc5_dat3 */
+		>;
+	};
+
+	/* notle: notle_uart2_pads, ttyO1 = Bluetooth. */
+	uart2_pins: uart2-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x118, PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_cts */
+			OMAP4_IOPAD(0x11a, PIN_OUTPUT | MUX_MODE0)		/* uart2_rts */
+			OMAP4_IOPAD(0x11c, PIN_INPUT_PULLUP | MUX_MODE0)	/* uart2_rx */
+			OMAP4_IOPAD(0x11e, PIN_OUTPUT | MUX_MODE0)		/* uart2_tx */
+		>;
+	};
+
+	/* notle: evt2_board_mux. */
+	wlan_pins: wlan-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x066, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a19.gpio_43: WL_RST_N */
+		>;
+	};
+
+	wl_bt_reg_on_pins: wl-bt-reg-on-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x070, PIN_OUTPUT | MUX_MODE3)		/* gpmc_a24.gpio_48: WL_BT_REG_ON */
+		>;
+	};
+
+	bluetooth_pins: bluetooth-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x058, PIN_OUTPUT | MUX_MODE3)		/* gpmc_ad12.gpio_36: BCM_BT_WAKE */
+			OMAP4_IOPAD(0x0fc, PIN_OUTPUT | MUX_MODE3)		/* abe_mcbsp2_fsx.gpio_113: BT_RST_N */
+		>;
+	};
+};
+
+/* notle: evt2_board_wkup_mux. */
+&omap4_pmx_wkup {
+	camera_button_pins: camera-button-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x056, WAKEUP_EN | PIN_INPUT_PULLUP | MUX_MODE3)	/* fref_clk3_req.gpio_wk30: CAMERA */
+		>;
+	};
+
+	touchpad_pins: touchpad-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x046, WAKEUP_EN | PIN_INPUT_PULLUP | MUX_MODE3)	/* sim_cd.gpio_wk3: TOUCHPAD_INT_N */
+		>;
+	};
+
+	imu_pins: imu-pins {
+		pinctrl-single,pins = <
+			OMAP4_IOPAD(0x048, WAKEUP_EN | PIN_INPUT | MUX_MODE3)	/* sim_pwrctrl.gpio_wk4: MPU9000_INT */
+		>;
+	};
+};
+
+&gpio2 {
+	/*
+	 * WL_BT_REG_ON powers both halves of the BCM4330 (notle: the Bluetooth
+	 * rfkill drives it, and older boards switched Wi-Fi with it too), so it
+	 * stays high: Bluetooth is switched by BT_RST_N, Wi-Fi by WL_RST_N.
+	 */
+	wl-bt-reg-on-hog {
+		gpio-hog;
+		gpios = <16 GPIO_ACTIVE_HIGH>;			/* GPIO 48 */
+		output-high;
+		line-name = "wl-bt-reg-on";
+	};
+};
+
+&mmc2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc2_pins>;
+
+	vmmc-supply = <&vaux1>;
+	ti,non-removable;
+	bus-width = <8>;
+};
+
+&mmc5 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	non-removable;
+	bus-width = <4>;
+	vmmc-supply = <&vwlan>;
+	mmc-pwrseq = <&wlan_pwrseq>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc5_pins>;
+
+	/* In-band SDIO interrupt; the host-wake line (GPIO 0) is not used. */
+	brcmf: wifi@1 {
+		compatible = "brcm,bcm4330-fmac", "brcm,bcm4329-fmac";
+		reg = <1>;
+	};
+};
+
+&uart2 {
+	interrupts-extended = <&wakeupgen GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH
+			       &omap4_pmx_core OMAP4_UART2_RX>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2_pins>;
+
+	/*
+	 * notle: board-notle-bluetooth.c. No host-wake interrupt, so the chip
+	 * stays out of its low-power mode (no LPM vendor commands).
+	 */
+	bluetooth {
+		compatible = "brcm,bcm4330-bt";
+		pinctrl-names = "default";
+		pinctrl-0 = <&bluetooth_pins>;
+		reset-gpios = <&gpio4 17 GPIO_ACTIVE_LOW>;		/* GPIO 113 */
+		device-wakeup-gpios = <&gpio2 4 GPIO_ACTIVE_HIGH>;	/* GPIO 36 */
+		clocks = <&twl 0>;
+		clock-names = "lpo";
+	};
+};
+
+&i2c1 {
+	/* notle: notle_i2c_1_boardinfo, the bq27520 gas gauge. */
+	fuel-gauge@55 {
+		compatible = "ti,bq27520";
+		reg = <0x55>;
+	};
+};
+
+&i2c3 {
+	/* notle: synaptics_platformdata, "tm2240", F11, attention active low. */
+	touchpad@20 {
+		compatible = "syna,rmi4-i2c";
+		reg = <0x20>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;			/* GPIO 3 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&touchpad_pins>;
+		syna,reset-delay-ms = <100>;
+
+		rmi4-f01@1 {
+			reg = <0x1>;
+			syna,nosleep-mode = <1>;			/* RMI_F01_NOSLEEP_OFF */
+		};
+
+		rmi4-f11@11 {
+			reg = <0x11>;
+			touchscreen-inverted-y;				/* flip_y */
+			syna,sensor-type = <2>;				/* touchpad */
+		};
+	};
+};
+
+&i2c4 {
+	/* notle: mpu9150_notle_data, int_config 0x10 (active high). */
+	imu@68 {
+		compatible = "invensense,mpu9150";
+		reg = <0x68>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <4 IRQ_TYPE_EDGE_RISING>;		/* GPIO 4 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&imu_pins>;
+		mount-matrix = "0", "1", "0",
+			       "0", "0", "1",
+			       "1", "0", "0";
+	};
+};

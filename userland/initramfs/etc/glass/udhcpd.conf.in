@@ -1,0 +1,8 @@
+# udhcpd on the USB link: the desktop gets 172.16.42.2.
+start 172.16.42.2
+end 172.16.42.2
+interface @IF@
+max_leases 1
+lease_file /run/glass/udhcpd.leases
+option subnet 255.255.255.0
+option lease 86400

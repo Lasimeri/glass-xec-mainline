@@ -1,0 +1,59 @@
+#!/bin/sh
+# glass-gadget: the USB device side, network plus serial console. Prints the
+# network interface's name. Mainline: configfs, NCM (Linux, macOS) + ACM
+# serial (/dev/ttyACM0 on the desktop). Stock 3.4 kernel: android_usb, RNDIS.
+# The IDs are the Linux Foundation's multifunction composite gadget ones.
+cfg=/sys/kernel/config/usb_gadget
+if [ -d "$cfg" ]; then
+    g=$cfg/glass
+    if [ ! -d "$g" ]; then
+        mkdir "$g" && cd "$g" || exit 1
+        echo 0x1d6b > idVendor
+        echo 0x0104 > idProduct
+        echo 0x0100 > bcdDevice
+        echo 0x0200 > bcdUSB
+        mkdir strings/0x409
+        echo "glass-xec" > strings/0x409/manufacturer
+        echo "Glass XE-C (Linux $(uname -r))" > strings/0x409/product
+        echo "glass-xec" > strings/0x409/serialnumber
+        mkdir functions/ncm.usb0 functions/acm.GS0
+        # Fixed, locally administered addresses: the desktop sees the same
+        # interface every boot.
+        echo 02:47:4c:41:53:01 > functions/ncm.usb0/host_addr
+        echo 02:47:4c:41:53:02 > functions/ncm.usb0/dev_addr
+        mkdir -p configs/c.1/strings/0x409
+        echo "NCM + ACM" > configs/c.1/strings/0x409/configuration
+        echo 250 > configs/c.1/MaxPower
+        ln -s functions/ncm.usb0 configs/c.1/
+        ln -s functions/acm.GS0 configs/c.1/
+    fi
+    cd "$g" || exit 1
+    # The MUSB controller registers a little after boot.
+    i=0
+    while [ -z "$(ls /sys/class/udc 2> /dev/null)" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+    udc=$(ls /sys/class/udc 2> /dev/null | head -n 1)
+    [ -n "$udc" ] || { echo "glass-gadget: no UDC" >&2; exit 1; }
+    echo "$udc" > UDC || exit 1
+    cat functions/ncm.usb0/ifname
+    exit 0
+fi
+a=/sys/class/android_usb/android0
+if [ -d "$a" ]; then
+    echo 0 > $a/enable
+    echo 18D1 > $a/idVendor
+    echo D001 > $a/idProduct
+    echo "glass-xec" > $a/iManufacturer
+    echo "Glass XE-C" > $a/iProduct
+    echo rndis > $a/functions
+    echo 1 > $a/enable
+    i=0
+    while [ $i -lt 10 ]; do
+        for n in rndis0 usb0; do
+            [ -d /sys/class/net/$n ] && { echo $n; exit 0; }
+        done
+        sleep 1
+        i=$((i + 1))
+    done
+fi
+echo "glass-gadget: no gadget interface" >&2
+exit 1

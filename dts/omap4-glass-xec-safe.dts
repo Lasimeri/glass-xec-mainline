@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Google Glass XE-C, the first-boot image: memory, the TWL6030 PMIC, the USB
+ * gadget (network and serial console from the initramfs) and crash logs.
+ * Every MMC controller stays disabled, so this image cannot touch the eMMC.
+ */
+#include "omap4-glass-xec-common.dtsi"
+
+/ {
+	model = "Google Glass Explorer Edition (XE-C), safe image";
+};

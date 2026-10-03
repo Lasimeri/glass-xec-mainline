@@ -1,0 +1,4 @@
+# Added to build/initramfs by gen_init_cpio (kbuild): the nodes the kernel
+# needs before devtmpfs is mounted, which a user cannot mknod.
+nod /dev/console 0600 0 0 c 5 1
+nod /dev/null 0666 0 0 c 1 3

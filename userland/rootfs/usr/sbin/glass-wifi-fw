@@ -1,0 +1,16 @@
+#!/bin/sh
+# glass-wifi-fw linux|glass: which BCM4330 firmware brcmfmac loads (takes
+# effect at the next boot). linux: linux-firmware's 5.90.195.114 (2013, the
+# default); glass: Google's own fw_bcmdhd.bin, 5.90.195.122 (2014).
+d=/lib/firmware/brcm
+case "${1:-}" in
+    linux)
+        [ -f $d/brcmfmac4330-sdio.linux.bin ] && mv $d/brcmfmac4330-sdio.linux.bin $d/brcmfmac4330-sdio.bin
+        ;;
+    glass)
+        [ -f $d/brcmfmac4330-sdio.linux.bin ] || mv $d/brcmfmac4330-sdio.bin $d/brcmfmac4330-sdio.linux.bin
+        cp $d/brcmfmac4330-sdio.glass.bin $d/brcmfmac4330-sdio.bin
+        ;;
+    *) echo "glass-wifi-fw linux|glass" >&2; exit 1 ;;
+esac
+echo "glass-wifi-fw: $1 at the next boot"

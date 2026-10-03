@@ -1,0 +1,66 @@
+#!/bin/sh
+# glass-collect: what the next device-tree iteration needs from this Glass,
+# as a tar on stdout. On the desktop:
+#   ssh root@172.16.42.1 glass-collect > collect-$(date +%H%M).tar
+# Reads only; never writes the eMMC.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+d=/run/collect
+rm -rf "$d"
+mkdir -p "$d"
+cd "$d" || exit 1
+c() { f=$1; shift; "$@" > "$f" 2>&1; }
+# A 32-bit register: busybox devmem when it has the applet, else devmem2.
+rd() {
+    if command -v devmem > /dev/null; then devmem "$1" 32
+    else devmem2 "$1" w 2> /dev/null | sed -n 's/^Value at address.*: //p'
+    fi
+}
+
+c kernel.txt sh -c 'uname -a; cat /proc/cmdline; cat /proc/device-tree/model 2> /dev/null; echo'
+c dmesg.txt dmesg
+c init.log cat /run/glass/init.log /run/glass/rcS.log
+c cpuinfo.txt cat /proc/cpuinfo
+c meminfo.txt cat /proc/meminfo
+c iomem.txt cat /proc/iomem
+c interrupts.txt cat /proc/interrupts
+c partitions.txt sh -c 'cat /proc/partitions; for u in /sys/class/block/*/uevent; do echo "== $u"; cat "$u"; done'
+c devices.txt sh -c 'ls -l /sys/bus/platform/devices/ /sys/bus/i2c/devices/ /sys/class/net/ /sys/class/udc/ /sys/class/bluetooth/ /sys/class/input/ 2> /dev/null'
+c drivers-deferred.txt cat /sys/kernel/debug/devices_deferred
+c regulators.txt cat /sys/kernel/debug/regulator/regulator_summary
+c clocks.txt cat /sys/kernel/debug/clk/clk_summary
+c gpio.txt cat /sys/kernel/debug/gpio
+c pinctrl.txt sh -c 'for p in /sys/kernel/debug/pinctrl/*/; do echo "== $p"; cat "$p/pinmux-pins" "$p/pins" 2> /dev/null; done'
+c config.txt sh -c 'zcat /proc/config.gz'
+c usb.txt sh -c 'cat /sys/kernel/config/usb_gadget/glass/UDC; ls -lR /sys/kernel/config/usb_gadget/glass'
+c net.txt sh -c 'ip addr; ip route; cat /run/glass/udhcpd.leases'
+c power.txt sh -c 'for p in /sys/class/power_supply/*/; do echo "== $p"; cat "$p/uevent"; done'
+c thermal.txt sh -c 'for t in /sys/class/thermal/thermal_zone*/; do echo "$t $(cat $t/type) $(cat $t/temp)"; done'
+if command -v i2cdetect > /dev/null; then
+    c i2c.txt sh -c 'for b in /dev/i2c-*; do echo "== $b"; i2cdetect -y -r "${b#/dev/i2c-}"; done'
+fi
+if [ -d /sys/fs/pstore ]; then
+    mkdir -p pstore
+    cp /sys/fs/pstore/* pstore/ 2> /dev/null
+fi
+
+# The display controller as the bootloader left it: the framebuffer's
+# address and size are what a simple-framebuffer node needs. Read only when
+# CM_DSS_DSS_CLKCTRL (0x4a009120) says the module is functional (IDLEST,
+# bits 17:16, = 0): reading a gated module aborts.
+{
+    st=$(rd 0x4a009120)
+    echo "CM_DSS_DSS_CLKCTRL $st"
+    if [ -n "$st" ] && [ $(( (st >> 16) & 3 )) -eq 0 ]; then
+        for r in CONTROL1:0x48041040 TIMING_H1:0x48041064 TIMING_V1:0x48041068 \
+            POL_FREQ1:0x4804106c DIVISOR1:0x48041070 SIZE_LCD1:0x4804107c \
+            GFX_BA_0:0x48041080 GFX_BA_1:0x48041084 GFX_POSITION:0x48041088 \
+            GFX_SIZE:0x4804108c GFX_ATTRIBUTES:0x480410a0 GFX_ROW_INC:0x480410ac \
+            GFX_PIXEL_INC:0x480410b0; do
+            echo "DISPC_${r%%:*} $(rd ${r#*:})"
+        done
+    else
+        echo "DSS not functional: registers not read"
+    fi
+} > dss.txt 2>&1
+
+cd /run && tar -cf - collect

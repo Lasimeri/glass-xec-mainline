@@ -1,0 +1,36 @@
+#!/bin/sh
+# glass-pan: network over Bluetooth to the desktop (PAN; the desktop is the
+# NAP). Pair once, then connect:
+#   glass-pan pair AA:BB:CC:DD:EE:FF    (interactive: confirm on both sides)
+#   glass-pan up AA:BB:CC:DD:EE:FF      bnep0 by DHCP from the desktop
+#   glass-pan down | status
+case "${1:-}" in
+    pair)
+        mac=${2:?MAC}
+        bluetoothctl power on
+        bluetoothctl agent on
+        bluetoothctl default-agent
+        bluetoothctl --timeout 30 scan on > /dev/null &
+        sleep 10
+        bluetoothctl pair "$mac" && bluetoothctl trust "$mac"
+        ;;
+    up)
+        mac=${2:?MAC}
+        bluetoothctl power on
+        bt-network -c "$mac" nap > /run/glass/pan.log 2>&1 &
+        echo $! > /run/glass/pan.pid
+        i=0
+        while [ ! -d /sys/class/net/bnep0 ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+        [ -d /sys/class/net/bnep0 ] || { echo "glass-pan: no bnep0 (see /run/glass/pan.log)" >&2; exit 1; }
+        udhcpc -b -i bnep0 -p /run/udhcpc.bnep0.pid
+        ;;
+    down)
+        [ -f /run/udhcpc.bnep0.pid ] && kill "$(cat /run/udhcpc.bnep0.pid)"
+        [ -f /run/glass/pan.pid ] && kill "$(cat /run/glass/pan.pid)"
+        ;;
+    status)
+        bluetoothctl show
+        ip addr show bnep0 2> /dev/null
+        ;;
+    *) echo "glass-pan pair MAC | up MAC | down | status" >&2; exit 1 ;;
+esac

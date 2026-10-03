@@ -1,0 +1,34 @@
+#!/bin/sh
+# rcS-rootfs: the full system's start. The initramfs moved /dev, /run, /proc
+# and /sys here; the rest is mounted, the filesystem grows to fill userdata
+# once, then the USB link (shared with the initramfs), D-Bus (for BlueZ) and
+# Wi-Fi when a network is configured (glass-wifi add SSID PASSPHRASE).
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+log() { echo "glass-rootfs: $*" > /dev/kmsg; echo "$*" >> /run/glass/rcS.log; }
+mkdir -p /run/glass /run/dbus /var/lib/misc /tmp /dev/pts
+mountpoint -q /proc || mount -t proc proc /proc
+mountpoint -q /sys || mount -t sysfs sysfs /sys
+mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
+mount -t configfs configfs /sys/kernel/config 2> /dev/null
+mount -t pstore pstore /sys/fs/pstore 2> /dev/null
+hostname glass
+log "rootfs up"
+
+# The image is written smaller than the partition: grow it once (online).
+if [ ! -f /etc/glass/resized ]; then
+    dev=$(awk '$2 == "/" && $1 ~ /^\/dev\// { print $1 }' /proc/mounts | tail -n 1)
+    if [ -n "$dev" ] && resize2fs "$dev" >> /run/glass/rcS.log 2>&1; then
+        touch /etc/glass/resized
+        log "filesystem grown to the whole of $dev"
+    fi
+fi
+
+/etc/glass/rcS
+
+dbus-daemon --system && log "dbus up"
+if grep -q '^network=' /etc/wpa_supplicant/wpa_supplicant.conf 2> /dev/null; then
+    /usr/sbin/glass-wifi up &
+fi
+exit 0

@@ -1,0 +1,10 @@
+#!/bin/sh
+# console uart|usb: a root shell on the debug UART or the USB serial gadget,
+# started by init and started again when it ends. Waits for the device.
+case "$1" in
+    uart) tty=ttyS2; [ -e /dev/ttyO2 ] && tty=ttyO2 ;;
+    usb) tty=ttyGS0 ;;
+    *) exit 1 ;;
+esac
+while [ ! -e "/dev/$tty" ]; do sleep 2; done
+exec /sbin/getty -n -l /bin/sh -L 115200 "$tty" vt100

@@ -1,0 +1,10 @@
+# busybox init, the Glass XE-C initramfs.
+::sysinit:/etc/glass/rcS
+# A root shell on the debug UART (ttyS2 on mainline, ttyO2 on the stock
+# kernel) and on the USB serial gadget (ttyGS0, /dev/ttyACM0 on the desktop).
+::respawn:/etc/glass/console uart
+::respawn:/etc/glass/console usb
+# SSH on the USB network, keys only (/root/.ssh/authorized_keys).
+::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/sync

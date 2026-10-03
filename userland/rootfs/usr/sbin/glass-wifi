@@ -1,0 +1,33 @@
+#!/bin/sh
+# glass-wifi: the BCM4330 (brcmfmac, 2.4 GHz b/g/n).
+#   glass-wifi add SSID PASSPHRASE   store a WPA2 network
+#   glass-wifi up | down | scan | status
+c=/etc/wpa_supplicant/wpa_supplicant.conf
+case "${1:-}" in
+    add)
+        [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "glass-wifi add SSID PASSPHRASE" >&2; exit 1; }
+        mkdir -p /etc/wpa_supplicant
+        [ -f "$c" ] || printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' > "$c"
+        wpa_passphrase "$2" "$3" | grep -v '#psk=' >> "$c"
+        chmod 600 "$c"
+        ;;
+    up)
+        ip link set wlan0 up || exit 1
+        wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid
+        udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid
+        ;;
+    down)
+        [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)"
+        [ -f /run/wpa_supplicant.pid ] && kill "$(cat /run/wpa_supplicant.pid)"
+        ip link set wlan0 down
+        ;;
+    scan)
+        ip link set wlan0 up
+        iw dev wlan0 scan | grep -E '^BSS|SSID:|signal:'
+        ;;
+    status)
+        iw dev wlan0 link
+        ip addr show wlan0
+        ;;
+    *) echo "glass-wifi add SSID PASS | up | down | scan | status" >&2; exit 1 ;;
+esac

@@ -1,0 +1,79 @@
+#!/bin/sh
+# /init of the Glass XE-C initramfs (the mainline images and the stock-kernel
+# fallback). Mounts the kernel filesystems, then either switches to the
+# Alpine rootfs on the userdata partition (only when one is there, made by
+# scripts/build-userland.sh, and the command line does not say glass.stay) or
+# hands over to busybox init with this initramfs' own /etc/inittab.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+# The stock 3.4 kernel has no devtmpfs: busybox mdev fills /dev and
+# handles hotplug.
+if ! mount -t devtmpfs devtmpfs /dev 2> /dev/null; then
+    echo /sbin/mdev > /proc/sys/kernel/hotplug
+    mdev -s
+fi
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+mount -t tmpfs -o mode=0755 tmpfs /run
+mount -t tmpfs tmpfs /tmp
+mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null
+mount -t configfs configfs /sys/kernel/config 2> /dev/null
+mkdir -p /sys/fs/pstore && mount -t pstore pstore /sys/fs/pstore 2> /dev/null
+mkdir -p /run/glass
+log() { echo "glass-init: $*" > /dev/kmsg; echo "$*" >> /run/glass/init.log; }
+log "initramfs up, kernel $(uname -r)"
+hostname glass
+
+# The userdata partition by its GPT name (PARTNAME in the block uevent).
+userdata() {
+    for u in /sys/class/block/*/uevent; do
+        grep -qx 'PARTNAME=userdata' "$u" 2> /dev/null || continue
+        d=${u%/uevent}
+        echo "/dev/${d##*/}"
+        return 0
+    done
+    return 1
+}
+
+case " $(cat /proc/cmdline) " in
+    *" glass.stay "*) log "glass.stay: staying in the initramfs" ;;
+    *)
+        # The eMMC appears a few seconds into boot on the full image; the
+        # safe image has no MMC controller and finds nothing.
+        dev=""
+        i=0
+        while [ $i -lt 8 ]; do
+            dev=$(userdata) && break
+            sleep 1
+            i=$((i + 1))
+        done
+        if [ -n "$dev" ]; then
+            mkdir -p /newroot
+            # Read-only and without journal replay, to look without writing.
+            if mount -t ext4 -o ro,noload "$dev" /newroot 2> /dev/null; then
+                if [ -f /newroot/etc/glass-rootfs ]; then
+                    umount /newroot
+                    if mount -t ext4 -o rw "$dev" /newroot; then
+                        log "switching to the rootfs on $dev"
+                        umount /tmp 2> /dev/null
+                        for m in /dev /run /proc /sys; do
+                            mkdir -p "/newroot$m"
+                            mount --move "$m" "/newroot$m"
+                        done
+                        exec switch_root /newroot /sbin/init
+                    fi
+                    log "mounting $dev read-write failed: staying"
+                else
+                    log "$dev holds no glass rootfs (no /etc/glass-rootfs): staying"
+                    umount /newroot
+                fi
+            else
+                log "$dev is not ext4 (Android userdata, or empty): staying"
+            fi
+        else
+            log "no userdata partition (safe image, or eMMC not up): staying"
+        fi
+        ;;
+esac
+exec /sbin/init
