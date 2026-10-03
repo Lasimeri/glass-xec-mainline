@@ -1,0 +1,379 @@
+#!/bin/bash
+# glass: the one entry point for building, testing and flashing Glass XE-C.
+#   glass fetch                 download and verify everything (scripts/fetch.sh)
+#   glass build                 userland, kernel (initramfs and both DTBs built
+#                               in), images (scripts/build-*.sh)
+#   glass check                 static userland checks and out/SHA256SUMS
+#   glass status                what fastboot, adb and the USB link see
+#   glass root-boot             fastboot boot out/boot-xe24-adbroot.img: stock
+#                               XE24 Android with root adb, in RAM only
+#   glass backup [--with-userdata]
+#                               every partition over root adb into
+#                               backup/DATE/ (userdata and cache only on
+#                               request), sizes checked, SHA256SUMS,
+#                               partitions.txt
+#   glass info                  what stock Android knows about the hardware,
+#                               into backup/DATE/info/ (the DISPC state first)
+#   glass test-boot safe|full|stock
+#                               fastboot boot out/boot-V.img (RAM only), then
+#                               wait for 172.16.42.1 or /dev/ttyACM*
+#   glass flash-recovery safe|full|stock
+#                               the image into recovery (stock boot stays), only
+#                               with a backup and a known partition size
+#   glass flash-rootfs          out/rootfs.img into userdata
+#   glass restore               Google's XE24 boot, recovery and system back,
+#                               cache and userdata wiped
+#   glass restore-partition DIR NAME
+#                               one partition back from a backup directory
+#   glass ssh [CMD...]          root@172.16.42.1
+#   glass collect               glass-collect on the Glass into out/collect-DATE.tar
+#   glass serial                the USB serial console (/dev/ttyACM*)
+# Every write says what it will do and asks for a typed "yes" (or --yes).
+# Only boot, recovery, system, cache and userdata are ever written; xloader,
+# bootloader and fpga are refused outright; boot is written only by restore
+# and restore-partition.
+set -euo pipefail
+top=$(cd "$(dirname "$0")/.." && pwd)
+cd "$top"
+
+GLASS_IP=172.16.42.1
+ALLOW=(boot recovery system cache userdata)
+FORBID=(xloader bootloader fpga)
+YES=0
+WITH_USERDATA=0
+RESTORE_CTX=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        --yes) YES=1 ;;
+        --with-userdata) WITH_USERDATA=1 ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- "${args[@]+"${args[@]}"}"
+
+die() { echo "glass: $*" >&2; exit 1; }
+say() { echo "glass: $*"; }
+stamp() { date +%Y%m%d-%H%M%S; }
+need() { command -v "$1" > /dev/null || die "$1 is not installed"; }
+
+# A typed "yes" (or --yes) before any write.
+confirm() {
+    say "about to: $*"
+    [ "$YES" = 1 ] && return 0
+    local r
+    read -r -p "glass: type yes to go on: " r
+    [ "$r" = yes ] || die "not confirmed; nothing written"
+}
+# The same, but --yes does not count.
+confirm_typed() {
+    say "about to: $*"
+    local r
+    read -r -p "glass: type yes to go on: " r
+    [ "$r" = yes ] || die "not confirmed; nothing written"
+}
+
+# Whether a partition may be written at all.
+guard_part() {
+    local p=$1 x
+    for x in "${FORBID[@]}"; do
+        [ "$p" = "$x" ] && die "refusing to write $p: never xloader, bootloader or fpga (a bad write there may brick the Glass)"
+    done
+    for x in "${ALLOW[@]}"; do
+        [ "$p" = "$x" ] && return 0
+    done
+    die "refusing to write $p: only ${ALLOW[*]} are ever written"
+}
+
+# The only path to fastboot flash.
+fb_flash() {   # PARTITION IMAGE
+    local p=$1 img=$2
+    guard_part "$p"
+    [ "$p" = boot ] && [ "$RESTORE_CTX" != 1 ] &&
+        die "refusing to write boot: only glass restore and restore-partition write it"
+    [ -f "$img" ] || die "no $img"
+    say "fastboot flash $p $img"
+    fastboot flash "$p" "$img"
+}
+
+# adb with root, CR stripped (adbd before Android 5 answers through a pty).
+adbsh() { adb shell "$@" | tr -d '\r'; }
+need_root_adb() {
+    need adb
+    adb get-state > /dev/null 2>&1 || die "no adb device (glass root-boot first, then wait for Android)"
+    # toolbox id (Android 4.4) has no -u: uid=0(root) ...
+    is_root() { case "$(adbsh id 2> /dev/null)" in uid=0\(*) return 0 ;; esac; return 1; }
+    if ! is_root; then
+        adb root > /dev/null 2>&1 || true
+        sleep 3
+        adb wait-for-device
+        is_root || die "adb is not root (boot out/boot-xe24-adbroot.img: glass root-boot)"
+    fi
+}
+
+# The by-name directory of the eMMC's partitions.
+byname_dir() {
+    local d
+    d=$(adbsh 'ls -d /dev/block/platform/*/by-name /dev/block/platform/*/*/by-name 2>/dev/null' | head -n 1)
+    [ -n "$d" ] || die "no by-name directory under /dev/block/platform"
+    echo "$d"
+}
+
+# A by-name link's target: readlink, else the arrow in ls -l.
+resolve() {   # DIR NAME
+    local t
+    t=$(adbsh "readlink $1/$2" 2> /dev/null)
+    case "$t" in
+        /dev/*) echo "$t"; return 0 ;;
+    esac
+    adbsh "ls -l $1/$2" | sed -n 's/.*-> *//p'
+}
+
+# Whether adb exec-out works (adbd of Android 5 and later); otherwise copies
+# go through /data/local/tmp and adb pull, binary-safe either way.
+exec_out_ok() { [ "$(adb exec-out echo ok 2> /dev/null)" = ok ]; }
+
+# The newest backup directory holding NAME.img.
+newest_backup_with() {
+    local d
+    for d in $(ls -1d backup/*/ 2> /dev/null | sort -r); do
+        [ -f "$d$1.img" ] && { echo "${d%/}"; return 0; }
+    done
+    return 1
+}
+
+# The recovery partition's size in bytes: the newest backup's
+# partitions.txt, else fastboot getvar.
+recovery_size() {
+    local d s
+    if d=$(newest_backup_with recovery) && [ -f "$d/partitions.txt" ]; then
+        s=$(awk '$1 == "recovery" { print $3 }' "$d/partitions.txt")
+        [ -n "$s" ] && { echo "$s"; return 0; }
+    fi
+    s=$(fastboot getvar partition-size:recovery 2>&1 | sed -n 's/^partition-size:recovery: *\(0x[0-9a-fA-F]*\).*/\1/p')
+    [ -n "$s" ] && { echo $((s)); return 0; }
+    return 1
+}
+
+ssh_glass() {
+    mkdir -p out
+    ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
+        -o ConnectTimeout=5 "root@$GLASS_IP" "$@"
+}
+
+image_for() {   # safe|full|stock
+    case "${1:-}" in
+        safe | full) echo "out/boot-$1.img" ;;
+        stock) echo out/boot-stock-kernel.img ;;
+        *) die "which image: safe, full or stock" ;;
+    esac
+}
+
+verb=${1:-help}
+shift || true
+case "$verb" in
+    fetch) exec scripts/fetch.sh ;;
+
+    build)
+        scripts/build-userland.sh all
+        GLASS_INITRAMFS=$top/build/initramfs JOBS=${JOBS:-4} scripts/build-kernel.sh \
+            zImage ti/omap/omap4-glass-xec.dtb ti/omap/omap4-glass-xec-safe.dtb
+        scripts/build-images.sh
+        ;;
+
+    check)
+        scripts/check-userland.sh build/initramfs build/rootfs
+        (cd out && sha256sum -c SHA256SUMS)
+        ;;
+
+    status)
+        if command -v fastboot > /dev/null; then echo "fastboot:"; fastboot devices; fi
+        if command -v adb > /dev/null; then adb devices | sed 1d | sed 's/^/adb: /'; fi
+        if ping -c 1 -W 1 "$GLASS_IP" > /dev/null 2>&1; then say "$GLASS_IP answers (glass ssh)"; else say "$GLASS_IP does not answer"; fi
+        ls /dev/ttyACM* 2> /dev/null | sed 's/^/serial: /' || true
+        ;;
+
+    root-boot)
+        need fastboot
+        [ -f out/boot-xe24-adbroot.img ] || die "no out/boot-xe24-adbroot.img (glass build)"
+        say "fastboot boot out/boot-xe24-adbroot.img (RAM only, nothing written)"
+        fastboot boot out/boot-xe24-adbroot.img
+        say "wait for Android, then: glass backup; glass info"
+        ;;
+
+    backup)
+        need_root_adb
+        dir=$(byname_dir)
+        b=backup/$(stamp)
+        mkdir -p "$b"
+        say "partitions in $dir, into $b"
+        eo=0
+        exec_out_ok && eo=1
+        [ $eo = 1 ] || say "adb exec-out unsupported here: copying through /data/local/tmp"
+        : > "$b/partitions.txt"
+        for name in $(adbsh "ls $dir"); do
+            case "$name" in
+                userdata | cache) [ "$WITH_USERDATA" = 1 ] || { say "skip $name (--with-userdata to include)"; continue; } ;;
+            esac
+            dev=$(resolve "$dir" "$name")
+            [ -n "$dev" ] || die "cannot resolve $dir/$name"
+            sectors=$(adbsh "cat /sys/class/block/${dev##*/}/size")
+            want=$((sectors * 512))
+            say "$name ($dev, $want bytes)"
+            if [ $eo = 1 ]; then
+                adb exec-out "dd if=$dev bs=1048576 2>/dev/null" > "$b/$name.img"
+            else
+                adbsh "mkdir -p /data/local/tmp/glass && dd if=$dev of=/data/local/tmp/glass/$name.img bs=1048576 2>/dev/null"
+                adb pull "/data/local/tmp/glass/$name.img" "$b/$name.img" > /dev/null
+                adbsh "rm /data/local/tmp/glass/$name.img"
+            fi
+            got=$(stat -c %s "$b/$name.img")
+            [ "$got" = "$want" ] || die "$name: copied $got bytes, the partition has $want; backup incomplete in $b"
+            printf '%s %s %s\n' "$name" "$dev" "$want" >> "$b/partitions.txt"
+        done
+        (cd "$b" && sha256sum ./*.img > SHA256SUMS)
+        say "backup done: $b ($(wc -l < "$b/partitions.txt") partitions, sizes match, SHA256SUMS written)"
+        ;;
+
+    info)
+        need_root_adb
+        i=backup/$(stamp)/info
+        mkdir -p "$i"
+        dir=$(byname_dir)
+        grab() {   # FILE COMMAND
+            local f=$1
+            shift
+            if ! adbsh "$*" > "$i/$f" 2>&1; then echo "glass info: $f failed" >> "$i/errors.txt"; fi
+        }
+        # Mounting an already-mounted debugfs fails harmlessly (no grep in 4.4's toolbox).
+        adbsh 'mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null' > /dev/null 2>&1 || true
+        grab getprop.txt getprop
+        grab cmdline.txt cat /proc/cmdline
+        grab iomem.txt cat /proc/iomem
+        grab meminfo.txt cat /proc/meminfo
+        grab cpuinfo.txt cat /proc/cpuinfo
+        grab interrupts.txt cat /proc/interrupts
+        grab dmesg.txt dmesg
+        grab byname.txt ls -l "$dir"
+        grab partitions.txt cat /proc/partitions
+        grab partition-sizes.txt "for f in /sys/class/block/*/size; do echo \"\$f \$(cat \$f)\"; done"
+        grab dss-dispc.txt cat /sys/kernel/debug/omapdss/dispc
+        grab dss-debugfs.txt "for f in /sys/kernel/debug/omapdss/*; do echo \"== \$f\"; cat \$f; done"
+        grab omapdss-sysfs.txt "for f in /sys/devices/platform/omapdss/* /sys/devices/platform/omapdss/*/* /sys/devices/platform/omapdss/*/*/*; do [ -f \$f ] && { echo \"== \$f\"; cat \$f; }; done"
+        grab fb0.txt "for f in /sys/class/graphics/fb0/*; do [ -f \$f ] && { echo \"== \$f\"; cat \$f; }; done"
+        grab omap-mux.txt "for f in /sys/kernel/debug/omap_mux/board/* /sys/kernel/debug/omap_mux/*; do [ -f \$f ] && { echo \"== \$f\"; cat \$f; }; done"
+        grab gpio.txt cat /sys/kernel/debug/gpio
+        grab regulators.txt "for f in /sys/kernel/debug/regulator/*; do echo \"== \$f\"; cat \$f 2>&1; done"
+        grab regulators-sysfs.txt "for r in /sys/class/regulator/*; do echo \"== \$r \$(cat \$r/name) \$(cat \$r/microvolts 2>/dev/null) \$(cat \$r/state 2>/dev/null)\"; done"
+        grab i2c-devices.txt "for d in /sys/bus/i2c/devices/*; do echo \"\$d \$(cat \$d/name 2>/dev/null)\"; done"
+        if [ -n "$(adbsh 'command -v i2cdetect' 2> /dev/null)" ]; then
+            grab i2cdetect.txt "for b in 0 1 2 3 4; do echo \"== i2c-\$b\"; i2cdetect -y -r \$b; done"
+        fi
+        say "info in $i$([ -f "$i/errors.txt" ] && echo " (some paths missing: $i/errors.txt)")"
+        ;;
+
+    test-boot)
+        need fastboot
+        img=$(image_for "${1:-}")
+        [ -f "$img" ] || die "no $img (glass build)"
+        rm -f out/known_hosts_glass   # a new boot, a new dropbear host key
+        say "fastboot boot $img (RAM only, nothing written)"
+        fastboot boot "$img"
+        say "waiting up to 90 s for $GLASS_IP or /dev/ttyACM*"
+        t=0
+        while [ $t -lt 90 ]; do
+            if ping -c 1 -W 1 "$GLASS_IP" > /dev/null 2>&1; then
+                say "up: glass ssh; glass collect"
+                exit 0
+            fi
+            if ls /dev/ttyACM* > /dev/null 2>&1; then
+                say "USB serial is up ($(ls /dev/ttyACM* | tr '\n' ' ')): glass serial. No IP yet: is the new interface (ip -br link) up with DHCP?"
+            fi
+            sleep 2
+            t=$((t + 3))
+        done
+        say "nothing after 90 s. It wrote nothing: power-cycle it. Send back: fastboot getvar all, dmesg | tail -n 60 on this desktop, a photo of the display."
+        exit 1
+        ;;
+
+    flash-recovery)
+        need fastboot
+        img=$(image_for "${1:-}")
+        [ -f "$img" ] || die "no $img (glass build)"
+        newest_backup_with recovery > /dev/null || die "no backup holding recovery.img: glass root-boot, then glass backup, first"
+        size=$(recovery_size) || die "the recovery partition's size is unknown (no partitions.txt, fastboot getvar partition-size:recovery unanswered): refusing"
+        isz=$(stat -c %s "$img")
+        [ "$isz" -le "$size" ] || die "$img is $isz bytes, recovery holds $size: refusing"
+        confirm "write $img ($isz bytes) into recovery ($size bytes); stock boot stays as it is"
+        fb_flash recovery "$img"
+        say "written. To boot it: fastboot reboot recovery (the bootloader's support is unverified), or from Android adb reboot recovery; a button combination for recovery is unverified"
+        ;;
+
+    flash-rootfs)
+        need fastboot
+        [ -f out/rootfs.img ] || die "no out/rootfs.img (glass build)"
+        confirm_typed "write out/rootfs.img into userdata, overwriting it (oem unlock already wiped it; Android's data there is lost)"
+        fb_flash userdata out/rootfs.img
+        say "written: glass test-boot full switches to it"
+        ;;
+
+    restore)
+        need fastboot
+        z=dl/xe24/factory-xe24.zip
+        [ -f "$z" ] || die "no $z (glass fetch)"
+        for f in boot.img recovery.img system.img; do [ -f "dl/xe24/$f" ] || unzip -o -q "$z" "$f" -d dl/xe24; done
+        confirm "flash Google's XE24 boot, recovery and system from dl/xe24, erase cache, wipe userdata"
+        RESTORE_CTX=1
+        fb_flash boot dl/xe24/boot.img
+        fb_flash recovery dl/xe24/recovery.img
+        fb_flash system dl/xe24/system.img
+        fastboot erase cache
+        fastboot format userdata 2> /dev/null || fastboot erase userdata
+        say "stock XE24 restored: fastboot reboot"
+        ;;
+
+    restore-partition)
+        need fastboot
+        d=${1:?glass restore-partition DIR NAME}
+        name=${2:?glass restore-partition DIR NAME}
+        guard_part "$name"
+        f=$d/$name.img
+        [ -f "$f" ] || die "no $f"
+        if [ -f "$d/SHA256SUMS" ]; then
+            (cd "$d" && grep " \./$name\.img\$\| $name\.img\$" SHA256SUMS | sha256sum -c -) || die "$f does not match $d/SHA256SUMS"
+        fi
+        confirm "flash $f into $name"
+        RESTORE_CTX=1
+        fb_flash "$name" "$f"
+        ;;
+
+    ssh) ssh_glass "$@" ;;
+
+    collect)
+        mkdir -p out
+        o=out/collect-$(stamp).tar
+        ssh_glass glass-collect > "$o"
+        say "$o:"
+        tar -tvf "$o"
+        ;;
+
+    serial)
+        t=$(ls /dev/ttyACM* 2> /dev/null | head -n 1)
+        [ -n "$t" ] || die "no /dev/ttyACM* (the safe and full images give one; the stock kernel's gadget is RNDIS only)"
+        [ -r "$t" ] && [ -w "$t" ] || say "$t is not readable and writable for you: add yourself to its group ($(stat -c %G "$t"))"
+        if command -v busybox > /dev/null && busybox --list | grep -qx microcom; then
+            say "busybox microcom -s 115200 $t (leave: Ctrl-X)"
+            exec busybox microcom -s 115200 "$t"
+        elif command -v screen > /dev/null; then
+            say "screen $t 115200 (leave: Ctrl-A then k)"
+            exec screen "$t" 115200
+        elif command -v picocom > /dev/null; then
+            exec picocom -b 115200 "$t"
+        else
+            die "no busybox microcom, screen or picocom; any serial terminal at 115200 on $t works"
+        fi
+        ;;
+
+    help | -h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
+    *) die "unknown verb $verb (glass help)" ;;
+esac

@@ -6,3 +6,5 @@
 # proprietary Glass firmware blobs
 /firmware/
 /tools/apk-host/
+# partition backups from the Glass (glass backup): personal, large
+/backup/
