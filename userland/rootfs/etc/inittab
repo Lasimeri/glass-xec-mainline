@@ -2,6 +2,9 @@
 ::sysinit:/etc/glass/rcS-rootfs
 ::respawn:/etc/glass/console uart
 ::respawn:/etc/glass/console usb
+# The Glass display (tty1 on the framebuffer console; glass-display runs
+# other programs there).
+::respawn:/etc/glass/console display
 ::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
 ::respawn:/usr/lib/bluetooth/bluetoothd -n
 ::ctrlaltdel:/sbin/reboot

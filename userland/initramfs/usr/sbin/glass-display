@@ -1,0 +1,11 @@
+#!/bin/sh
+# glass-display CMD [ARGS...]: run a program on the Glass display (the
+# framebuffer console), on virtual terminal 2, and switch the display to it;
+# tty1 keeps its shell. With no command: switch back to tty1.
+#   glass-display glass-term          the desktop's tmux session in the glasses
+#   glass-display dmesg -w            the kernel log
+if [ $# -eq 0 ]; then
+    chvt 1
+    exit 0
+fi
+exec openvt -c 2 -s -f -- "$@"

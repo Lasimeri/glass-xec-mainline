@@ -25,6 +25,32 @@ log() { echo "glass-init: $*" > /dev/kmsg; echo "$*" >> /run/glass/init.log; }
 log "initramfs up, kernel $(uname -r)"
 hostname glass
 
+# The display: the bootloader left the DISPC's graphics pipe scanning
+# 0x80500000, which the mainline kernel now occupies. Point it at the
+# console's framebuffer (the device tree's simple-framebuffer at
+# 0x9c700000), set its format to xRGB (0x8, no alpha) and latch it (GOLCD2).
+# Only on mainline with that node, and only when CM_DSS_DSS_CLKCTRL says the
+# module is clocked (reading a gated DISPC aborts).
+display_handoff() {
+    [ -e /proc/device-tree/chosen/framebuffer@9c700000 ] || return 0
+    command -v devmem2 > /dev/null || return 0
+    rd() { devmem2 "$1" w 2> /dev/null | sed -n 's/^Value at address.*: //p'; }
+    wr() { devmem2 "$1" w "$2" > /dev/null 2>&1; }
+    st=$(rd 0x4a009120)
+    if [ -z "$st" ] || [ $(( (st >> 16) & 3 )) -ne 0 ]; then
+        log "display: DSS not clocked (CM_DSS_DSS_CLKCTRL $st), left alone"
+        return 0
+    fi
+    a=$(rd 0x480410a0)
+    c=$(rd 0x48041238)
+    wr 0x48041080 0x9c700000
+    wr 0x48041084 0x9c700000
+    wr 0x480410a0 $(( (a & ~0x1e) | (0x8 << 1) ))
+    wr 0x48041238 $(( c | 0x20 ))
+    log "display: GFX_BA0/BA1 0x9c700000, attributes $a, control2 $c, ba0 now $(rd 0x48041080)"
+}
+display_handoff
+
 # The userdata partition by its GPT name (PARTNAME in the block uevent).
 userdata() {
     for u in /sys/class/block/*/uevent; do

@@ -30,10 +30,12 @@ LIMIT=5611520
 hdr=(--base 0x80000000 --kernel-offset 0x00008000 --ramdisk-offset 0x01000000
      --second-offset 0x00f00000 --tags-offset 0x00000100 --pagesize 2048)
 # mainline: the 8250 console is ttyS2; the bootloader's ATAGs (memory,
-# this command line) are folded into the appended DTB. clk/regulator
-# _ignore_unused: mainline turns off unclaimed TWL6030 rails and clocks 30 s
-# into boot, which would look like a hang.
-mcmd="console=ttyS2,115200n8 earlycon panic=10 rdinit=/init loglevel=7 clk_ignore_unused regulator_ignore_unused"
+# this command line) are folded into the appended DTB. clk_, regulator_ and
+# pd_ignore_unused: mainline turns off unclaimed TWL6030 rails, clocks and
+# power domains 30 s into boot, which would look like a hang (and would take
+# the bootloader's display down). VGA8x16 gives 80 x 22 on the 640 x 360
+# display.
+mcmd="console=ttyS2,115200n8 earlycon panic=10 rdinit=/init loglevel=7 clk_ignore_unused regulator_ignore_unused pd_ignore_unused fbcon=font:VGA8x16"
 scmd="console=ttyO2,115200n8 vmalloc=500M androidboot.console=ttyO2 androidboot.carrier=wifi-only product_type=w cpuidle_sysfs_switch"
 
 fit() {   # IMG
@@ -103,7 +105,9 @@ if [ -d "$top/build/rootfs" ]; then
     mb=$(( $(du -sm "$r" | cut -f1) * 2 + 256 ))
     img=$out/rootfs.ext4
     rm -f "$img"
-    mke2fs -q -t ext4 -L glass-root -d "$r" "$img" "${mb}M"
+    # Without the features Google's 3.4 kernel cannot mount (metadata_csum and
+    # its seed from 3.6 on, orphan_file, 64bit), so both kernels can use it.
+    mke2fs -q -t ext4 -O ^metadata_csum,^metadata_csum_seed,^orphan_file,^64bit -L glass-root -d "$r" "$img" "${mb}M"
     ( cd "$r" && find . -mindepth 1 | sed 's|^\.||' | while IFS= read -r p; do
         printf 'sif "%s" uid 0\nsif "%s" gid 0\n' "$p" "$p"
       done; printf 'sif / uid 0\nsif / gid 0\n' ) > "$out/rootfs-owner.cmd"

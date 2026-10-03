@@ -21,6 +21,32 @@
 
 	chosen {
 		stdout-path = &uart3;	/* notle: ttyO2, the debug UART */
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * The display as the bootloader leaves it, a text console on it.
+		 * Glass's U-Boot (XE24 bootloader.img, the routine at 0x24604)
+		 * programs the iCE40 FPGA and the DISPC itself: LCD2, 640x360,
+		 * hsw 68 hfp 10 hbp 10 / vsw 10 vfp 5 vbp 5 (Google's panel
+		 * timings), graphics pipe ARGB32 from 0x80500000. That address lies
+		 * inside the decompressed mainline kernel, so this framebuffer is
+		 * elsewhere and /init points GFX_BA0/BA1 at it (with the format
+		 * set to xRGB, so no alpha) before anything is drawn on it.
+		 * Nothing here programs the panel or the FPGA.
+		 */
+		framebuffer@9c700000 {
+			compatible = "simple-framebuffer";
+			reg = <0x9c700000 (640 * 360 * 4)>;
+			width = <640>;
+			height = <360>;
+			stride = <(640 * 4)>;
+			format = "x8r8g8b8";
+			clocks = <&l3_dss_clkctrl OMAP4_DSS_CORE_CLKCTRL 0>,
+				 <&l3_dss_clkctrl OMAP4_DSS_CORE_CLKCTRL 8>;
+			power-domains = <&prm_dss>;
+		};
 	};
 
 	/*
@@ -52,6 +78,16 @@
 		 * 0x80000000 + 512 MB, 2 MB). Read after a reboot from
 		 * /sys/fs/pstore.
 		 */
+		/*
+		 * The console's framebuffer (640 x 360 x 4 = 921600 bytes), in RAM
+		 * the stock kernel used as ordinary memory (its default bootargs
+		 * map 456 MB from 0x80000000: up to 0x9c800000).
+		 */
+		framebuffer@9c700000 {
+			reg = <0x9c700000 0x100000>;
+			no-map;
+		};
+
 		ramoops@a0000000 {
 			compatible = "ramoops";
 			reg = <0xa0000000 0x200000>;
@@ -204,6 +240,16 @@
 
 &twl_usb_comparator {
 	usb-supply = <&vusb>;
+};
+
+/*
+ * The display subsystem's bus module stays out of mainline's hands: probed,
+ * ti-sysc would reset and idle it, and the bootloader's running display
+ * would go dark. Its clocks and power domain are held by the framebuffer
+ * above (and pd_ignore_unused on the command line).
+ */
+&{/ocp/target-module@58000000} {
+	status = "disabled";
 };
 
 /* Every MMC controller off; the full image turns on MMC2 and MMC5. */

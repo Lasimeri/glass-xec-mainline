@@ -55,6 +55,11 @@ fastboot reboot bootloader     # or step 2 again
 scripts/glass test-boot safe   # RAM only; waits up to 90 s
 ```
 - **You should see:**
+  - **in the glasses:** a Linux text console (80 x 22) and a shell prompt a few seconds into boot.
+    - The bootloader leaves the display running (its routine at 0x24604 in `bootloader.img` scans a 640 x 360 ARGB framebuffer at `0x80500000`), and the kernel unpacks over that address, so for a moment it may show noise.
+    - `/init` then points the display at the console's framebuffer (`0x9c700000`, the device tree's `simple-framebuffer`).
+    - If it stays dark or shows noise: `glass ssh`, then `cat /run/glass/init.log` (the `display:` line) and `glass collect` (`dss.txt`) say why.
+    - `glass-display glass-term` puts the desktop's tmux session there (step 10 sets up the desktop side).
   - a new network interface on the desktop, `enx02474c415301` (the gadget's fixed address 02:47:4c:41:53:01), with `ip -br addr` showing `172.16.42.2`;
   - `/dev/ttyACM0` (the serial console);
   - then:
@@ -138,7 +143,7 @@ scripts/glass flash-recovery full
 ```sh
 scripts/glass restore          # Google's XE24 boot, recovery, system; cache erased, userdata wiped
 ```
-Or one partition from your backup: `scripts/glass restore-partition backup/DATE recovery`. `xloader`, `bootloader` and `fpga` are never written by any verb.
+Or one partition from your backup: `scripts/glass restore-partition backup/DATE recovery`. `xloader`, `bootloader`, `fpga` and `efs` (per-device data: the stock fstab mounts it as `/bootconfig`) are never written by any verb.
 
 ## Troubleshooting
 | symptom | likely cause | what to do, what to send |

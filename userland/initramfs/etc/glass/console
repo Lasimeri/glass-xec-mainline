@@ -1,9 +1,11 @@
 #!/bin/sh
-# console uart|usb: a root shell on the debug UART or the USB serial gadget,
+# console uart|usb|display: a root shell on the debug UART, the USB serial
+# gadget or the Glass display (tty1, the framebuffer console),
 # started by init and started again when it ends. Waits for the device.
 case "$1" in
     uart) tty=ttyS2; [ -e /dev/ttyO2 ] && tty=ttyO2 ;;
     usb) tty=ttyGS0 ;;
+    display) tty=tty1 ;;
     *) exit 1 ;;
 esac
 while [ ! -e "/dev/$tty" ]; do sleep 2; done
