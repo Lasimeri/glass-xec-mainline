@@ -70,6 +70,8 @@ fi
 # 2:1 and its text at the size the nested session draws it.
 castopt=()
 [ "$out" = window ] && castopt=(--window)
+# ASK=1: ask again in the dialog (another window or monitor than last time).
+[ "${ASK:-0}" = 1 ] && castopt+=(--forget)
 
 # The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
 # pushed into RAM once per boot on an initramfs-only Glass.
