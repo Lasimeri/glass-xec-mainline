@@ -63,7 +63,7 @@ for t in glass-fb glass-tap glass-console glass-play glass-camera; do
     if cmp -s "$src" "/usr/local/src/$t.c" && [ -x "/usr/local/bin/$t" ]; then continue; fi
     case $t in
         glass-fb) flags="-O3 -mfpu=neon -mfloat-abi=hard"; libs="-lpthread" ;;
-        glass-play) flags="-O2"; libs="-lasound" ;;
+        glass-play) flags="-O2"; libs="" ;;
         glass-camera) flags="-O2 -I./usr/local/src/omx"; libs="-lpthread" ;;
         *) flags="-O2"; libs="" ;;
     esac

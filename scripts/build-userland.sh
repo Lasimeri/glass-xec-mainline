@@ -110,7 +110,8 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     # glass-console (tools/glass-console): the shell drawn on the display
     # (the stock kernel has no framebuffer console), the same way.
     # glass-play (tools/glass-play): the sound at a fixed delay however the
-    # clocks drift; built with -lasound (alsa-lib-dev on the Glass).
+    # clocks drift; the device spoken to with the 3.4 kernel's own ioctls (no
+    # alsa-lib: its time64 calls do not exist there).
     # glass-camera (tools/glass-camera): the camera and the H.264 encoder on
     # the Ducati, spoken to over rpmsg (docs/ducati-omx.md); built with the
     # OMX headers in tools/glass-camera/omx.
