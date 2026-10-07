@@ -27,7 +27,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 `scripts/glass ssh` finds the Glass by itself, in this order: the remembered address (`out/glass-ip`, at home the fixed 192.168.0.80), the router's name `glass`, the USB cable (172.16.42.1), the tailnet address, then a search of the home network by the Wi-Fi MAC. Every address is checked against one pinned host key.
 
-On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 2000 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames.
+On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 1500 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames.
 
 `scripts/glass status` shows the whole state in one table: how the Glass is reachable, battery, board temperature, CPU clock, display and sound settings, what runs on it, the last stream report and the desktop's supervisors.
 
@@ -37,7 +37,7 @@ On the Glass (in its shell, or from the desktop as `scripts/glass ssh 'COMMAND'`
 
 | setting | command | now |
 | --- | --- | --- |
-| volume | `glass-audio volume 75` | 75 |
+| volume | the desktop's volume control for the "Google Glass" output (slider and mute, volume keys while it is the default) sets the Glass's own level, live; on the Glass `glass-audio volume 75` and `glass-audio mute on` | 100% |
 | sound output | `glass-audio route earphone 75` (the bone conduction speaker) or `headset` | earphone |
 | sound delay behind the desktop | `glass-audio delay 150` at home, `glass-audio delay remote 400` over the tailnet (each applies within 2 s) | 150 ms, 400 ms |
 | brightness | `glass-brightness 80` (1 to 223) | 80 |
@@ -52,7 +52,7 @@ On the desktop:
 | --- | --- |
 | which monitor | `scripts/glass-view.sh MONITOR 15` once (remembered in `out/glass-output`); now DP-2, the left one |
 | frame rate | `scripts/glass-viewd.sh` passes 15; the Glass is held to 300 MHz by its own thermal governors when warm, and 24 a second was not kept there |
-| video bit rate and cushion | `BITRATE=3000` (kbit/s) and `CUSHION=1` (frames, up to 6) for `glass-view.sh`; over the tailnet 2000, about 250 ms, and `REMOTE_FPS=12` by default |
+| video bit rate and cushion | `BITRATE=3000` (kbit/s) and `CUSHION=1` (frames, up to 6) for `glass-view.sh`; over the tailnet 1500, about 250 ms, and `REMOTE_FPS=12` by default |
 
 ## Keeping it current
 

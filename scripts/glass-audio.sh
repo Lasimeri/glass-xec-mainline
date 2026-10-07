@@ -40,11 +40,38 @@ fi
 exec 9> "$run/glass-audio.lock"
 flock -n 9 || { echo "glass-audio: already running" >&2; exit 0; }
 
-# The sink, once (by name; a second load would make a second one).
-if ! pactl list short sinks | awk '{print $2}' | grep -qx "$sink"; then
-    pactl load-module module-null-sink sink_name="$sink" \
-        sink_properties='device.description="Google Glass"' rate=48000 channels=2 > /dev/null
+# The sink, once (by name; a second load would make a second one). Its
+# monitor without the sink's volume (monitor.channel-volumes false): the
+# stream leaves at full scale and the volume control is applied on the Glass
+# (glass-audio control). A sink made before that (the monitor carrying the
+# volume) is made again, once.
+props='device.description="Google Glass" monitor.channel-volumes=false'
+m=$(pactl list short modules | awk -v n="sink_name=$sink" '$2 == "module-null-sink" && index($0, n) { print $1; exit }')
+if [ -n "$m" ] && ! pactl list short modules | awk -v m="$m" '$1 == m' | grep -q 'monitor.channel-volumes=false'; then
+    pactl unload-module "$m"
+    m=""
 fi
+if [ -z "$m" ]; then
+    pactl load-module module-null-sink sink_name="$sink" sink_properties="$props" rate=48000 channels=2 > /dev/null
+fi
+
+# The desktop's volume control for the Glass: the slider and mute of the
+# "Google Glass" output go to glass-audio control on the Glass, once at the
+# start and on every change, and set the Glass's own level there.
+volume_state() {
+    echo "volume $(pactl get-sink-volume "$sink" | grep -o '[0-9]*%' | head -n 1 | tr -d %)"
+    echo "mute $(pactl get-sink-mute "$sink" | awk '{ print ($2 == "yes") ? 1 : 0 }')"
+}
+volume_link() {   # ADDRESS
+    local id
+    id=$(pactl list short sinks | awk -v n="$sink" '$2 == n { print $1; exit }')
+    {
+        volume_state
+        pactl subscribe 2> /dev/null | while read -r ev; do
+            case "$ev" in *"'change' on sink #$id") volume_state ;; esac
+        done
+    } | GLASS_IP=$1 "$top/scripts/glass" ssh "glass-audio control" 2>> "$log"
+}
 
 prev=""
 # Streams that follow the default: those of applications (a client) playing
@@ -66,7 +93,7 @@ restore() {
     echo "glass-audio: $(date +%T) back to $prev" >> "$log"
     prev=""
 }
-trap 'kill $(jobs -p) 2> /dev/null; restore; exit 0' INT TERM
+trap 'for j in $(jobs -p); do kill -- -"$j" 2> /dev/null || kill "$j" 2> /dev/null; done; restore; exit 0' INT TERM
 
 echo "glass-audio: $(date +%T) started" >> "$log"
 # A real output to come back to: the stereo, else the first hardware sink.
@@ -112,7 +139,15 @@ while :; do
                     GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play" 2>> "$log" &
                 ;;
         esac
-        wait $!
+        session=$!
+        # The volume link beside the session, in its own process group (set
+        # -m) so that it ends whole with the session.
+        set -m
+        volume_link "$addr" &
+        link=$!
+        set +m
+        wait $session
+        kill -- -"$link" 2> /dev/null
         restore
     fi
     sleep 5

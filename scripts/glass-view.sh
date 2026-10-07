@@ -29,7 +29,8 @@ fps=${2:-24}
 # One address for every connection of this stream (glass addr: home Wi-Fi,
 # USB or the tailnet), and the mode it means: over the tailnet (the phone's
 # hotspot, away) the link is a cellular one through WireGuard, so the video
-# goes at 2000 kbit/s and 12 frames a second (the user's choice, 2026-10-07;
+# goes at 1500 kbit/s and 12 frames a second (the user's choice, 2026-10-07:
+# 2000 was more than the hotspot path carried, about 1.7 Mbit/s;
 # 3000 and the requested rate at home), and the Glass holds about 250 ms of
 # frames (3 at 12/s) against the link's jitter; REMOTE_FPS, BITRATE and
 # CUSHION change them.
@@ -41,7 +42,7 @@ remote=0
 case "$GLASS_IP" in 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) remote=1 ;; esac
 if [ $remote = 1 ]; then
     fps=${REMOTE_FPS:-12}
-    bitrate=${BITRATE:-2000}
+    bitrate=${BITRATE:-1500}
     echo "glass-view: the Glass is reached over the tailnet ($GLASS_IP): $fps frames/s at $bitrate kbit/s, a deeper cushion" >&2
 else
     bitrate=${BITRATE:-3000}

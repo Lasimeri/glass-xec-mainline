@@ -8,9 +8,13 @@
 #                                  stock audio HAL (audio.primary.glass_1.so)
 #                                  drives only Earphone, and Headset for the
 #                                  earbud, never Handsfree or Vibra
-#   glass-audio volume PERCENT     the Glass's own output level, kept with the
-#                                  route (the desktop's sink volume is a
-#                                  separate control on top of it)
+#   glass-audio volume PERCENT     the output level (0 to 100, the desktop's
+#                                  curve), kept with the route; while the
+#                                  desktop streams, its volume control for
+#                                  the "Google Glass" output sets it
+#   glass-audio mute on|off        silence, or the kept level again
+#   glass-audio control            "volume P" and "mute 0|1" lines on stdin,
+#                                  applied as they come (the desktop's link)
 #   glass-audio jack               "connected h2w|usb_audio" (exit 0) when an
 #                                  earbud or headset is plugged in, else
 #                                  "none" (exit 1)
@@ -40,9 +44,21 @@ delay_remote=/etc/glass/audio-delay-remote
 # reproduces (the user, 2026-10-07); a third less to carry than 48 kHz.
 rate=32000
 mix() { amixer -q -c 0 cset "name=$1" "$2" > /dev/null 2>&1 || echo "glass-audio: $1 = $2 refused" >&2; }
+# The volume is the ABE's digital gain on the Multimedia stream (DL1 Media
+# Playback Volume: 1 dB steps, 120 = 0 dB, 0 = muted), on the same curve the
+# desktop's volume control uses (PulseAudio: 60 log10 of the fraction, so
+# 50% is -18 dB); the analog outputs sit at the speaker's full range. The
+# desktop's slider for the "Google Glass" output drives it (glass-audio
+# control); 0% or a mute is silence.
+level() {   # PERCENT -> the DL1 Media Playback Volume value
+    awk -v p="$1" 'BEGIN { if (p <= 0) { print 0; exit } if (p > 100) p = 100
+        d = 120 + 60 * log(p / 100) / log(10); if (d < 0) d = 0; printf "%d\n", d + 0.5 }'
+}
+setvol() {   # PERCENT
+    mix 'DL1 Media Playback Volume' "$(level "$1")"
+}
 common() {
     mix 'DL1 Mixer Multimedia' on
-    mix 'DL1 Media Playback Volume' 120
     # DL1 Mixer reaches the PDM outputs only through the sidetone mixer
     # (the ABE's DAPM graph: DL1 Mixer -> Sidetone Mixer -> DL1 PDM).
     mix 'Sidetone Mixer Playback' on
@@ -63,19 +79,20 @@ route() {   # OUTPUT PERCENT
     p=${2:-50}
     case "$1" in
         earphone)
-            mix 'Earphone Playback Volume' $((15 * p / 100))
+            mix 'Earphone Playback Volume' 15
             mix 'Earphone Playback Switch' on ;;
         handsfree)
             mix 'DL1 PDM_DL2 Switch' on
-            mix 'Handsfree Playback Volume' "$((29 * p / 100)),$((29 * p / 100))"
+            mix 'Handsfree Playback Volume' 29,29
             mix 'Handsfree Left Playback' 'HF DAC'
             mix 'Handsfree Right Playback' 'HF DAC' ;;
         headset)
-            mix 'Headset Playback Volume' "$((15 * p / 100)),$((15 * p / 100))"
+            mix 'Headset Playback Volume' 15,15
             mix 'Headset Left Playback' 'HS DAC'
             mix 'Headset Right Playback' 'HS DAC' ;;
         *) echo "glass-audio route earphone|handsfree|headset [VOLUME%]" >&2; return 1 ;;
     esac
+    setvol "$p"
 }
 tone() {   # HZ SECONDS
     /usr/local/bin/ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=$1:duration=$2:sample_rate=48000" \
@@ -91,9 +108,37 @@ case "${1:-}" in
         done
         echo none; exit 1 ;;
     volume)
-        [ -f "$conf" ] || { echo "glass-audio: no route yet (glass-audio route ...)" >&2; exit 1; }
-        set -- $(cat "$conf") "${2:-50}"
-        route "$1" "$3" && echo "$1 $3" > "$conf" ;;
+        # The level only, no re-routing (no click); kept with the route.
+        p=${2:-}
+        case "$p" in '' | *[!0-9]*) echo "glass-audio volume PERCENT (0 to 100)" >&2; exit 1 ;; esac
+        [ "$p" -le 100 ] || p=100
+        set -- $(cat "$conf" 2> /dev/null) earphone   # $1: the output kept
+        setvol "$p" && echo "$1 $p" > "$conf"
+        echo "volume $p%" ;;
+    mute)
+        # glass-audio mute on|off: silence, or the kept level again.
+        set -- "${2:-}" $(cat "$conf" 2> /dev/null) earphone 50
+        case "$1" in
+            on) mix 'DL1 Media Playback Volume' 0 ;;
+            off) setvol "$3" ;;
+            *) echo "glass-audio mute on|off" >&2; exit 1 ;;
+        esac ;;
+    control)
+        # Lines on stdin from the desktop's volume control (glass-audio.sh):
+        # "volume PERCENT" and "mute 0|1", applied as they come; the level
+        # is kept (the Glass starts at it), a mute is not.
+        muted=0
+        while read -r what v; do
+            case "$what $v" in
+                "volume "[0-9]*)
+                    set -- $(cat "$conf" 2> /dev/null) earphone 50
+                    [ "$v" -le 100 ] 2> /dev/null || v=100
+                    [ "$v" = "$2" ] || echo "$1 $v" > "$conf"
+                    [ $muted = 1 ] || setvol "$v" ;;
+                "mute 1") muted=1; mix 'DL1 Media Playback Volume' 0 ;;
+                "mute 0") muted=0; set -- $(cat "$conf" 2> /dev/null) earphone 50; setvol "$2" ;;
+            esac
+        done ;;
     delay)
         # glass-audio delay [MS]          on the home network (and USB)
         # glass-audio delay remote [MS]   over the tailnet (hotspot, away)
@@ -159,5 +204,5 @@ case "${1:-}" in
             [ "$n" = "$cur" ] || { cur=$n; use; }
         done
         wait $a 2> /dev/null ;;
-    *) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
