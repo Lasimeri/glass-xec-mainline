@@ -72,6 +72,8 @@ castopt=()
 [ "$out" = window ] && castopt=(--window)
 # ASK=1: ask again in the dialog (another window or monitor than last time).
 [ "${ASK:-0}" = 1 ] && castopt+=(--forget)
+# No cropping of a monitor: the Glass screen (glass-screen.sh) is captured as
+# the window it is, its own 1280x720 surface, whole.
 
 # The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
 # pushed into RAM once per boot on an initramfs-only Glass.

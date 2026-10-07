@@ -15,6 +15,9 @@ fi
 [ -n "$f" ] && [ -f "$f" ] || { echo "glass-mirror: no transcript in $dir" >&2; exit 1; }
 command -v jq > /dev/null || { echo "glass-mirror: jq is not installed" >&2; exit 1; }
 printf '\033]30;claude on the glasses\007'
+# The font for a 640x360 display seen through a nested screen at scale 2:
+# Konsole takes profile changes through this escape (konsoleprofile).
+printf '\033]50;Font=%s\007' "${GLASS_FONT:-Monospace,16}"
 echo "glass-mirror: following $(basename "$f")"
 # The last reply first (the tail of the file), then everything new.
 tail -n 200 -f "$f" |
