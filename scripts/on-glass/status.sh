@@ -36,7 +36,7 @@ cur=$(v /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)
 p=/sys/devices/platform/omapdss/manager2/panel-notle-dpi
 row display "brightness $(v $p/brightness) of $(v $p/brightness_limit)$(pidof glass-console > /dev/null && echo ', shell shown when idle')"
 set -- $(v /etc/glass/audio-route)
-row sound "${1:-earphone} at ${2:-50}%, $(v /etc/glass/audio-delay || echo 150) ms behind the desktop"
+row sound "${1:-earphone} at ${2:-50}%, $(v /etc/glass/audio-delay || echo 150) ms behind the desktop at home, $(v /etc/glass/audio-delay-remote || echo 400) ms over the tailnet"
 
 # What runs: each part, up or not.
 up=""; down=""
