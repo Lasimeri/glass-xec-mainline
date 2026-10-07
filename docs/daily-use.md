@@ -43,6 +43,8 @@ The USB cable is a charger and a fallback, never the working path: every session
 
 `scripts/glass status` shows the whole state in one table: how the Glass is reachable, battery, board temperature, CPU clock, display and sound settings, what runs on it, the last stream report and the desktop's supervisors.
 
+`scripts/glass btop` opens btop on the Glass (Alpine's package, kept by `glass update`): in the terminal it is run from, or in its own Konsole window. Its battery meter, top right of the CPU box, reads the fuel gauge (`bq27520-0`): the charge, an arrow while charging, the time left or to full, and the watts in or out; config `/root/.config/btop/btop.conf` on the Glass (2 s updates for the 300 MHz CPU).
+
 ## Where the sound goes
 
 On the desktop, `scripts/glass audio` (instant; also in the application launcher and KRunner as "Glass audio: ..."):

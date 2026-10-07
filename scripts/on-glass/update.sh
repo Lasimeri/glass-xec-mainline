@@ -16,10 +16,10 @@ s=/tmp/glass-update
 cd "$s" || exit 1
 say() { echo "update: $*"; }
 
-# 1. Packages: sound (amixer, libasound), Tailscale, and the compiler the
+# 1. Packages: sound (amixer, libasound), Tailscale, btop (glass btop), and the compiler the
 # tools are built with here.
 missing=""
-for p in alsa-utils alsa-lib tailscale gcc musl-dev linux-headers alsa-lib-dev; do
+for p in alsa-utils alsa-lib tailscale btop gcc musl-dev linux-headers alsa-lib-dev; do
     apk info -e "$p" > /dev/null 2>&1 || missing="$missing $p"
 done
 if [ -n "$missing" ]; then

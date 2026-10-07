@@ -61,6 +61,7 @@
 #                               USB or tailnet)
 #   glass camera [WxH] [FPS] [KBIT/S]
 #   glass local-camera [on|off]  the camera on the Glass's own screen (nothing over the network)
+#   glass btop                    btop on the Glass, its battery meter on the fuel gauge (a window when run without a terminal)
 #                               the Glass's camera in a window here: H.264
 #                               from the Ducati's encoder, no sound (default
 #                               960x540, half the camera's 1920x1080 video
@@ -272,7 +273,10 @@ ssh_glass() {
     # One pinned host key for every address the Glass turns up at (home
     # Wi-Fi, USB, the tailnet, the hotspot): HostKeyAlias checks each against
     # the entry "glass", so a new address is never trusted on first sight.
-    ssh "${id[@]}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
+    # GLASS_SSH_TTY=1: a terminal on the Glass (glass btop).
+    local tty=()
+    [ "${GLASS_SSH_TTY:-0}" = 1 ] && tty=(-t)
+    ssh "${id[@]}" "${tty[@]}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
         -o HostKeyAlias=glass \
         -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "root@$GLASS_IP" "$@"
 }
@@ -626,6 +630,19 @@ case "$verb" in
         ;;
 
     ssh) ssh_glass "$@" ;;
+
+    btop)
+        # btop on the Glass (its battery meter reads the fuel gauge,
+        # bq27520-0; config /root/.config/btop/btop.conf there, 2 s updates
+        # for the 300 MHz CPU): in this terminal, or in a Konsole window
+        # when there is none. The Glass has no locale: C.UTF-8 for btop.
+        if [ -t 0 ] && [ -t 1 ]; then
+            GLASS_SSH_TTY=1 ssh_glass "LANG=C.UTF-8 TERM=xterm-256color exec btop"
+        else
+            setsid konsole --separate -p tabtitle="Glass btop" -e "$top/scripts/glass" btop < /dev/null > /dev/null 2>&1 &
+            say "btop on the Glass in a Konsole window"
+        fi
+        ;;
 
     # The Glass's Wi-Fi address, asked over whatever link works, remembered
     # in out/glass-ip for the next run.

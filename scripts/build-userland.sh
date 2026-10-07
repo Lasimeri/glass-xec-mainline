@@ -83,7 +83,7 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     apk --root "$r" add dropbear dropbear-dbclient dropbear-scp i2c-tools devmem2 busybox-extras \
         wpa_supplicant iw wireless-regdb bluez bluez-deprecated bluez-tools dbus \
         tmux kbd e2fsprogs e2fsprogs-extra evtest \
-        alsa-utils alsa-lib tailscale gcc musl-dev linux-headers alsa-lib-dev
+        alsa-utils alsa-lib tailscale btop gcc musl-dev linux-headers alsa-lib-dev
     common "$r"
     cp -a "$top/userland/rootfs/." "$r/"
     chmod 755 "$r/etc/glass/rcS-rootfs" "$r"/usr/sbin/glass-*
