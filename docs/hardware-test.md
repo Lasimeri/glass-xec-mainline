@@ -137,11 +137,11 @@ scripts/glass flash-recovery full
 
 ## 9a. Wireless: Wi-Fi, the name "glass", ssh over the air
 ```sh
-scripts/glass-wifi-copy --from lasimeri@192.168.0.78 HomeMixed   # a laptop's saved network onto the Glass
+scripts/glass-wifi-copy --from USER@LAPTOP HomeWiFi   # a laptop's saved network onto the Glass
 scripts/glass ssh glass-wifi status                               # ssid, state, address
-GLASS_IP=192.168.0.4 scripts/glass ssh                            # over Wi-Fi; or just scripts/glass ssh
+GLASS_IP=192.168.1.50 scripts/glass ssh                            # over Wi-Fi; or just scripts/glass ssh
 ```
-The Glass joins its stored networks at boot (`rcS-rootfs`), announces the hostname `glass` with its DHCP lease, and `scripts/glass` reaches it by that name when the router resolves it, else by `GLASS_IP`, else over USB. The passphrase is never shown or typed: `glass-wifi-copy` reads it on the laptop with sudo and feeds it down the Glass's ssh session, where `glass-wifi add` keeps the derived key only (`/etc/wpa_supplicant`, root only). On the stock kernel the radio is Google's `bcmdhd`, fed its firmware from `/lib/firmware/glass`. Works since 2026-10-07 (HomeMixed, 192.168.0.4, signal -63 dBm, 39 Mbit/s, 4.5 ms round trip). Bluetooth's daemons start only with `glass-pan`: the Glass has two cores and the stream's decoder wants one. **Radio power save is off** after joining (`glass-wifi up`): with it on, the sleeping radio received the stream in bursts at each beacon, TCP piled up thousands of retransmissions and the glasses showed one frame every two seconds; off, one retransmission in five seconds and the full rate.
+The Glass joins its stored networks at boot (`rcS-rootfs`), announces the hostname `glass` with its DHCP lease, and `scripts/glass` reaches it by that name when the router resolves it, else by `GLASS_IP`, else over USB. The passphrase is never shown or typed: `glass-wifi-copy` reads it on the laptop with sudo and feeds it down the Glass's ssh session, where `glass-wifi add` keeps the derived key only (`/etc/wpa_supplicant`, root only). On the stock kernel the radio is Google's `bcmdhd`, fed its firmware from `/lib/firmware/glass`. Works since 2026-10-07 (the home network, signal -63 dBm, 39 Mbit/s, 4.5 ms round trip). Bluetooth's daemons start only with `glass-pan`: the Glass has two cores and the stream's decoder wants one. **Radio power save is off** after joining (`glass-wifi up`): with it on, the sleeping radio received the stream in bursts at each beacon, TCP piled up thousands of retransmissions and the glasses showed one frame every two seconds; off, one retransmission in five seconds and the full rate.
 
 ## 9b. The desktop's monitor on the glasses
 ```sh
@@ -170,7 +170,7 @@ The panel is 640x360 (a Himax HX7309 nHD LCOS, color by sequential fields at 312
     sudo dnsmasq --interface=br-glass --bind-interfaces --dhcp-range=172.16.43.2,172.16.43.20
     bt-network -s nap br-glass
     ```
-    Then, on the Glass, `glass-term lasimeri@172.16.43.1`.
+    Then, on the Glass, `glass-term USER@172.16.43.1`.
   - **NetworkManager:** its Bluetooth sharing (a `bluetooth` connection of type `nap` with a bridge).
 
 ## 11. Back to stock

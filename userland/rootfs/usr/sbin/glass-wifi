@@ -11,7 +11,7 @@
 #                                     when several are in range (default 0)
 #   glass-wifi static SSID ADDR/LEN GATEWAY [DNS]
 #                                     a fixed address on that network, no
-#                                     DHCP there (home: 192.168.0.80/24, the
+#                                     DHCP there (home: 192.168.1.50/24, the
 #                                     user's choice 2026-10-07); SSID off
 #                                     for DHCP again; alone, the list
 #   glass-wifi use SSID | auto        join that network now (until "auto" or
@@ -154,7 +154,7 @@ case "${1:-}" in
     forget)
         [ -n "${2:-}" ] || die "glass-wifi forget SSID"
         [ -f "$c" ] || exit 0
-        # The SSID compared as text, not as a pattern ("O+ Open" has a +).
+        # The SSID compared as text, not as a pattern (a name may hold a +).
         awk -v s="$2" '
             /^network=\{/ { blk = $0; inb = 1; keep = 1; next }
             inb { blk = blk "\n" $0; t = $0; sub(/^[ \t]+/, "", t); if (t == "ssid=\"" s "\"") keep = 0; if ($0 ~ /^\}/) { inb = 0; if (keep) print blk }; next }
@@ -164,7 +164,7 @@ case "${1:-}" in
     priority)
         # With several stored networks in range the highest number is
         # joined (wpa_supplicant's priority; 0 when unset). The user ranks the
-        # phone's hotspot (O+ Open, 20) above home (10), 2026-10-07.
+        # phone's hotspot (PhoneHotspot, 20) above home (10), 2026-10-07.
         [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "glass-wifi priority SSID N"
         case "$3" in *[!0-9]*) die "glass-wifi priority SSID N (a whole number, 0 or more)" ;; esac
         [ -f "$c" ] || die "no networks stored (glass-wifi add)"
@@ -311,8 +311,8 @@ case "${1:-}" in
             echo "glass-wifi: $ssid by DHCP"
         else
             a=${3:-}; g=${4:-}; d=${5:-${4:-}}
-            echo "$a" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || die "glass-wifi static SSID ADDR/LEN GATEWAY [DNS] (e.g. 192.168.0.80/24 192.168.0.1)"
-            echo "$g" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || die "the gateway is an address, e.g. 192.168.0.1"
+            echo "$a" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || die "glass-wifi static SSID ADDR/LEN GATEWAY [DNS] (e.g. 192.168.1.50/24 192.168.1.1)"
+            echo "$g" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || die "the gateway is an address, e.g. 192.168.1.1"
             { [ -f "$st" ] && awk -F '\t' -v s="$ssid" '$1 != s' "$st"; printf '%s\t%s\t%s\t%s\n' "$ssid" "$a" "$g" "$d"; } > "$st.new" && mv "$st.new" "$st"
             echo "glass-wifi: $ssid at $a (gateway $g, DNS $d)"
         fi

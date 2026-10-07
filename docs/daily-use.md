@@ -29,7 +29,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 ## Reaching it
 
-`scripts/glass ssh` finds the Glass by itself, in this order: the remembered address (`out/glass-ip`, at home the fixed 192.168.0.80), the router's name `glass`, the USB cable (172.16.42.1), the tailnet address, then a search of the home network by the Wi-Fi MAC. Every address is checked against one pinned host key.
+`scripts/glass ssh` finds the Glass by itself, in this order: the remembered address (`out/glass-ip`, at home the fixed 192.168.1.50), the router's name `glass`, the USB cable (172.16.42.1), the tailnet address, then a search of the home network by the Wi-Fi MAC. Every address is checked against one pinned host key.
 
 On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 1500 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames. When the Glass changes network, every session follows by itself: a path guard beside each one (`scripts/glass-pathguard.sh`) ends a tailnet session as soon as home Wi-Fi or the USB cable answers, and a home session after two missed pings; its supervisor starts it again on the new path, in that path's mode. The Glass shell window is left alone (it keeps working over the tailnet, and reopens if its path dies).
 
@@ -70,10 +70,10 @@ On the Glass (in its shell, or from the desktop as `scripts/glass ssh 'COMMAND'`
 | sound output | `glass-audio route earphone 75` (the bone conduction speaker) or `headset` | earphone |
 | sound delay behind the desktop | `glass-audio delay 150` at home, `glass-audio delay remote 400` over the tailnet (each applies within 2 s) | 150 ms, 400 ms |
 | brightness | `glass-brightness 80` (1 to 223) | 80 |
-| a fixed address on a network | `glass-wifi static HomeMixed 192.168.0.80/24 192.168.0.1`; `glass-wifi static HomeMixed off` for DHCP | home: 192.168.0.80 |
-| which network first | `glass-wifi priority "O+ Open" 20` (higher first) | hotspot 20, home 10 |
-| this network now | `glass-wifi use "O+ Open"` (until `glass-wifi use auto` or a reboot) | by priority |
-| a new Wi-Fi network | from the desktop, without typing the passphrase: `scripts/glass-wifi-copy --from USER@HOST "NAME"`; on the Glass: `glass-wifi add "NAME"` | HomeMixed, O+ Open |
+| a fixed address on a network | `glass-wifi static HomeWiFi 192.168.1.50/24 192.168.1.1`; `glass-wifi static HomeWiFi off` for DHCP | home: 192.168.1.50 |
+| which network first | `glass-wifi priority "PhoneHotspot" 20` (higher first) | hotspot 20, home 10 |
+| this network now | `glass-wifi use "PhoneHotspot"` (until `glass-wifi use auto` or a reboot) | by priority |
+| a new Wi-Fi network | from the desktop, without typing the passphrase: `scripts/glass-wifi-copy --from USER@HOST "NAME"`; on the Glass: `glass-wifi add "NAME"` | HomeWiFi, PhoneHotspot |
 
 On the desktop:
 
