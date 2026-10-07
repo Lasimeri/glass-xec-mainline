@@ -8,7 +8,8 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 | part | what it does |
 | --- | --- |
-| Wi-Fi (`glass-wifi up`) | joins the stored networks by `priority`: the phone's hotspot first when it is on, else home; the address follows the network joined: fixed at home, DHCP elsewhere; a watchdog reassociates after 30 s without a network and restarts Wi-Fi after 90 s |
+| Wi-Fi (`glass-wifi up`) | joins the stored networks by `priority`: the phone's hotspot first when it is on, else home; the address follows the network joined: fixed at home, DHCP elsewhere; leaves the network properly at shutdown (the router refused rejoins after an unannounced reboot). A watchdog: reassociates after 30 s without a network; if the access point is refusing, stops trying for 90 s and then tries once; restarts Wi-Fi after 20 s with the radio itself down (a driver hang) or 180 s without a network |
+| the Ducati (`glass-firmware`) | the camera and video coprocessor started with its firmware from `/lib/firmware` (the kernel asks before any userspace exists); `glass camera` uses it |
 | clock | set from the internet once an address exists, retried for two minutes |
 | Tailscale (`tailscaled`) | the Glass on the tailnet as `glass`, reachable from the desktop on any network |
 | display shell (`glass-console`) | a shell with a blinking cursor and two status lines (network and address, tailnet address, battery), shown whenever no stream is |
@@ -95,3 +96,7 @@ On the desktop:
 | `/var/log/glass-wifi.log` on the Glass | Wi-Fi joins and drops, the address taken, the watchdog's actions, kept across reboots |
 | `/run/glass/rcS.log` on the Glass | this boot: boot steps, Wi-Fi, the clock |
 | `/run/glass/glass-console.log`, `/run/glass/tailscaled.log` | the display shell, Tailscale |
+| `$XDG_RUNTIME_DIR/glass-camera.log` | the camera window: sessions, frames and kbit/s every 5 s |
+| `/var/log/glass-firmware.log`, `/sys/kernel/debug/remoteproc/remoteproc0/trace1` on the Glass | the Ducati: its start at boot, and its own messages (camera and encoder errors) |
+| `/proc/asound/card0/pcm0p/sub0/status` on the Glass | the sound device: its `trigger_time` must stay the same while playing (a changing one is the stream restarting) |
+| `scripts/glass reboot-test [N]`, `scripts/glass unplug-test [N]` | the repeatable checks: everything back after a reboot; every session on Wi-Fi when the cable comes out |

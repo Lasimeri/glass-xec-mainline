@@ -70,3 +70,12 @@ Plan and background: [[Google Glass XE-C - pure Linux build (2026-10-03)]].
   - Glass enters a menu with camera + power; whether that menu is the bootloader's or the recovery partition's is unverified.
 - **Alpine armv7:** `latest-stable` is 3.24.x (3.24.2 dated 2026-09-17), armv7 minirootfs published. https://archive.sunet.se/mirror/alpinelinux.org/v3.24/releases/armv7/
 - Google's documented root and unflash commands (`fastboot oem unlock` twice, flash the rooted boot.img, `adb root`; restore boot/system/recovery). https://developers.google.com/glass/tools-downloads/system
+
+## 2026-10-07: what the hardware taught (stock XE24 kernel 3.4.94, Alpine userland on the eMMC)
+Details and commands in [daily-use.md](daily-use.md) and [ducati-omx.md](ducati-omx.md); the commits name each change.
+- **Heat:** the CPU is held at 300 MHz by the thermal cap (cpufreq max_thermal, case governor 57/62 C) whatever the governor asks; the stream settled at 15 frames/s.
+- **Display:** omapfb's pan never reaches the hardware; glass-fb flips by writing DISPC GFX_BA0/BA1 and the GO bit through /dev/mem. No framebuffer console: glass-console draws the idle shell.
+- **Sound:** the bone conduction transducer is the TWL6040 Earphone output. Alpine's alsa-lib is time64 and calls SYNC_PTR 0xc0884123, which 3.4 lacks: the PCM stopped and restarted every one to five seconds and the refusal was logged thousands of times a second. glass-play now uses the 3.4 ioctls directly (48 kHz device, the 32 kHz stream resampled, never stopped, real-time priority): no restarts, no underruns. musl's sched_setscheduler() is an ENOSYS stub.
+- **Wi-Fi:** power save must be off. After an ungraceful reboot the router refused associations (status 1) until attempts paused: shutdown now deauthenticates, the watchdog backs off. The BCM4330 driver hung once (SDIO timeout, radio off, firmware paths emptied); `glass-wifi up` restores it.
+- **Ducati:** its firmware request is made before userspace exists (no hotplug helper in the kernel); glass-firmware answers it from /lib/firmware. The camera (OV5680) and the H.264 encoder work through TI's DOMX wire spoken in C (tools/glass-camera); the camera needs OMX_CaptureVideo mode to deliver frames.
+- **Paths:** sessions prefer home Wi-Fi; the USB cable is a fallback; path guards move every session when the path changes (glass unplug-test, glass reboot-test).
