@@ -47,7 +47,18 @@ supplicant() {
     conf
     [ -S /run/wpa_supplicant/wlan0 ] && return 0
     radio
-    wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid || die "wpa_supplicant did not start"
+    # In the foreground of a background job, its messages (why a join
+    # failed) kept in /var/log/wpa_supplicant.log (this build has no -f);
+    # the last 2000 lines kept when it passes 512 KB.
+    l=/var/log/wpa_supplicant.log
+    mkdir -p /var/log
+    if [ -f "$l" ] && [ "$(wc -c < "$l")" -gt 524288 ]; then tail -n 2000 "$l" > "$l.new" && mv "$l.new" "$l"; fi
+    echo "--- $(date '+%F %T') start" >> "$l"
+    setsid wpa_supplicant -t -i wlan0 -c "$c" >> "$l" 2>&1 < /dev/null &
+    echo $! > /run/wpa_supplicant.pid   # -P writes it only with -B
+    i=0
+    while [ ! -S /run/wpa_supplicant/wlan0 ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    [ -S /run/wpa_supplicant/wlan0 ] || die "wpa_supplicant did not start ($l)"
 }
 
 # What Wi-Fi did, kept across boots in /var/log/glass-wifi.log (the last
@@ -213,6 +224,10 @@ case "${1:-}" in
             down=$((down + 10))
             if [ $down = 30 ]; then
                 wlog "not joined for 30 s (state ${st:-none}): reassociating; in sight: $(wpa_cli -i wlan0 scan_results 2> /dev/null | awk -F '\t' 'NR > 1 && $5 != "" { printf "%s %s, ", $5, $3 }')"
+                # Networks wpa_supplicant set aside after failed tries come back
+                # (a plain reassociate left them aside: 3.5 min without Wi-Fi
+                # after a boot on 2026-10-07, the home network in sight).
+                wpa_cli -i wlan0 enable_network all > /dev/null 2>&1
                 wpa_cli -i wlan0 reassociate > /dev/null 2>&1
             elif [ $down -ge 90 ]; then
                 wlog "not joined for 90 s: restarting Wi-Fi"
