@@ -78,6 +78,9 @@ case "${1:-}" in
         # Backgrounds and keeps asking when the lease is slow (an access
         # point not yet up at boot); the router learns the name "glass".
         udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 || die "udhcpc did not start"
+        # The clock: no battery-backed time survives a power-off here, and
+        # TLS (apk's mirrors) refuses a date in 2000; once joined, set it.
+        (sleep 5; ntpd -n -q -p pool.ntp.org > /dev/null 2>&1) &
         ;;
     down)
         [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null

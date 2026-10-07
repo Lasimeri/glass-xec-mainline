@@ -95,6 +95,15 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
         mkdir -p "$r/usr/local/bin"
         cp "$ff" "$r/usr/local/bin/ffmpeg"
     fi
+    # glass-fb (tools/glass-fb/glass-fb.c): the page-flip writer behind the
+    # stream, compiled on the Glass itself (gcc from Alpine over Wi-Fi) and
+    # copied back to out/glass-fb; there is no ARM compiler here.
+    if [ -f "$top/out/glass-fb" ]; then
+        mkdir -p "$r/usr/local/bin" "$r/usr/local/src"
+        cp "$top/out/glass-fb" "$r/usr/local/bin/glass-fb"
+        chmod 755 "$r/usr/local/bin/glass-fb"
+        cp "$top/tools/glass-fb/glass-fb.c" "$r/usr/local/src/"
+    fi
     # What dbus' pre-install script would have done.
     grep -q '^messagebus:' "$r/etc/group" || echo 'messagebus:x:101:' >> "$r/etc/group"
     grep -q '^messagebus:' "$r/etc/passwd" ||

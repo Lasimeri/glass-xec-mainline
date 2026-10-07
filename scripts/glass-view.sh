@@ -72,6 +72,31 @@ castopt=()
 [ "$out" = window ] && castopt=(--window)
 # ASK=1: ask again in the dialog (another window or monitor than last time).
 [ "${ASK:-0}" = 1 ] && castopt+=(--forget)
+# The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
+# pushed into RAM once per boot on an initramfs-only Glass.
+gff=/usr/local/bin/ffmpeg
+glass_ffmpeg() {
+    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
+    gff=/tmp/ffmpeg
+    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
+    local f
+    f=$(ls -d "$top"/dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg 2> /dev/null | head -n 1)
+    [ -n "$f" ] || { echo "glass-view: no dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg (glass fetch)" >&2; return 1; }
+    echo "glass-view: pushing ffmpeg ($(stat -c %s "$f") bytes) into the Glass's RAM" >&2
+    "$top/scripts/glass" ssh "cat > $gff && chmod +x $gff" < "$f"
+}
+glass_ffmpeg || exit 1
+# The display writer on the Glass: glass-fb (tools/glass-fb, page flips on
+# the vertical sync, tear-free) when the rootfs has it, else ffmpeg's own
+# fbdev output (writes the visible page directly).
+decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra"
+if "$top/scripts/glass" ssh 'test -x /usr/local/bin/glass-fb' < /dev/null > /dev/null 2>&1; then
+    sink="$decode -f rawvideo - | /usr/local/bin/glass-fb"
+    echo "glass-view: the Glass flips pages on its vertical sync (glass-fb)" >&2
+else
+    sink="$decode -f fbdev /dev/fb0"
+fi
+
 # OUTPUT "follow": pixel perfect. A 640x360 window of the primary monitor,
 # one pixel to one pixel, that follows the pointer (desk cursor, through a
 # KWin script) and pans when the pointer nears its edge: the glasses show
@@ -98,26 +123,12 @@ if [ "$out" = follow ]; then
     trap 'kill $cur 2> /dev/null; rm -f "$fifo"' EXIT
     echo "glass-view: $out -> a ${W}x${H} window following the pointer, pixel for pixel, NVENC H.264 ${bitrate} kbit/s, $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
     "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$W" "$H" "$fps" "$bitrate" "$fifo" \
-        | "$top/scripts/glass" ssh "$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"
+        | "$top/scripts/glass" ssh "$sink"
     exit
 fi
 # No cropping of a monitor otherwise: the Glass screen (glass-screen.sh) is
 # captured as the window it is, its own 1280x720 surface, whole.
 
-# The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
-# pushed into RAM once per boot on an initramfs-only Glass.
-gff=/usr/local/bin/ffmpeg
-glass_ffmpeg() {
-    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
-    gff=/tmp/ffmpeg
-    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
-    local f
-    f=$(ls -d "$top"/dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg 2> /dev/null | head -n 1)
-    [ -n "$f" ] || { echo "glass-view: no dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg (glass fetch)" >&2; return 1; }
-    echo "glass-view: pushing ffmpeg ($(stat -c %s "$f") bytes) into the Glass's RAM" >&2
-    "$top/scripts/glass" ssh "cat > $gff && chmod +x $gff" < "$f"
-}
-glass_ffmpeg || exit 1
 
 # Nothing holds a frame anywhere: the portal sends a frame when the
 # compositor draws one (up to the monitor's rate), videorate in drop-only
@@ -140,4 +151,4 @@ fi
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
     ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" gop-size="$fps" zerolatency=true bframes=0 \
     ! h264parse ! mpegtsmux ! fdsink fd=1 sync=false \
-    | "$top/scripts/glass" ssh "$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"
+    | "$top/scripts/glass" ssh "$sink"
