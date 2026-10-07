@@ -43,9 +43,12 @@ SUMS
 # fetched: XE9 and earlier brick a unit on XE10 or later (Google's warning).
 [ -f xe24/factory-xe24.zip ] || curl -fL -o xe24/factory-xe24.zip https://storage.googleapis.com/support-kms-prod/bTh25b2gcZx5f7apQdJU3lULYTTBoZDHqdsr
 [ -f boot-rooted-xe22.img ] || curl -fL -o boot-rooted-xe22.img https://dl.google.com/glass/xe22/boot.img
+# XE21 (XRW66): what the user's unit runs (2026-10-07); glass root-boot uses it.
+[ -f boot-rooted-xe21.img ] || curl -fL -o boot-rooted-xe21.img https://dl.google.com/glass/xe21/boot.img
 sha1sum -c <<SUMS
 46430bc827267796566f0a73d9b503059759561c  xe24/factory-xe24.zip
 ae713187ee619dd3b24e2caf650b9b7bcb68305b  boot-rooted-xe22.img
+81a1308ac186ae750a914c4524e9f366acb496b5  boot-rooted-xe21.img
 SUMS
 
 # The AOSP 5.1.1 ROM for glass_1 (jtxdriggers, XDA, April 2016), a reference
