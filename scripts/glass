@@ -60,12 +60,15 @@
 #   glass addr                  the address the verbs would use now (Wi-Fi,
 #                               USB or tailnet)
 #   glass camera [WxH] [FPS] [KBIT/S]
-#   glass local-camera [on|off]  the camera on the Glass's own screen (nothing over the network)
-#   glass btop                    btop on the Glass, its battery meter on the fuel gauge (a window when run without a terminal)
 #                               the Glass's camera in a window here: H.264
 #                               from the Ducati's encoder, no sound (default
 #                               960x540, half the camera's 1920x1080 video
 #                               size, at 15/s and 768 kbit/s)
+#   glass local-camera [on|off] the camera on the Glass's own screen
+#                               (nothing over the network)
+#   glass btop                  btop on the Glass, its battery meter on the
+#                               fuel gauge (a window when run without a
+#                               terminal)
 #   glass collect               glass-collect on the Glass into out/collect-DATE.tar
 #   glass serial                the USB serial console (/dev/ttyACM*)
 # Every write says what it will do and asks for a typed "yes" (or --yes).
