@@ -25,6 +25,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | `glass-audio.sh` | while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; when the Glass is gone, back to the stereo. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
 | `glass-tap.sh` | a tap on the touchpad toggles the voice mute (`ptt079 --toggle`) |
 | `glass-camera.sh` | the camera window below, waiting for the Glass whenever it is away; a window closed or crashed is opened again by its service (to keep it closed for a while: `systemctl --user stop glass-camera`) |
+| `glass-display.service` | the Glass's own screen (its console, status lines and battery) in a window, "Glass display": `glass-fbgrab` on the Glass sends only the rows that changed every 250 ms (nothing while the screen is still), `out/glass-fbview` here keeps the picture; restarted 5 s after any exit |
 
 ## Reaching it
 

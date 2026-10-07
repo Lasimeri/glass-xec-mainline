@@ -340,7 +340,7 @@ case "$verb" in
         cp -a userland/initramfs/. "$stage/"
         cp -a userland/rootfs/. "$stage/"
         mkdir -p "$stage/usr/local/src" "$stage/usr/share/glass"
-        for t in glass-fb glass-tap glass-console glass-play glass-camera; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        for t in glass-fb glass-tap glass-console glass-play glass-camera glass-fbgrab; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
         cp -a tools/glass-camera/omx "$stage/usr/local/src/"   # the OMX headers glass-camera is built with
         font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
         if [ -f "$font" ]; then gzip -dc "$font" > "$stage/usr/share/glass/console.psf"; else say "no $font (kbd): the console font is not sent"; fi

@@ -57,7 +57,7 @@ done
 # 4. Tools: built from the staged source when it differs from the one the
 # binary was built from (kept in /usr/local/src after a good build only).
 built=""
-for t in glass-fb glass-tap glass-console glass-play glass-camera; do
+for t in glass-fb glass-tap glass-console glass-play glass-camera glass-fbgrab; do
     src=./usr/local/src/$t.c
     [ -f "$src" ] || continue
     if cmp -s "$src" "/usr/local/src/$t.c" && [ -x "/usr/local/bin/$t" ]; then continue; fi
