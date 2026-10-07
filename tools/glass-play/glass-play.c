@@ -35,10 +35,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -117,6 +119,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "glass-play: %s at %d Hz, target %d ms, device buffer %lu samples (period %lu)%s\n",
             dev, rate, target_ms, (unsigned long) bufsize, (unsigned long) persize, probe ? ", probe on" : "");
 
+    /* Real-time scheduling (SCHED_FIFO, priority 50): with both cores held
+     * at 300 MHz by the thermal cap and busy with the picture's decoder
+     * (load average 2.1 to 2.6), glass-play lost the CPU for longer than
+     * the device's buffer about once a second: 25 to 37 underruns every
+     * 30 s, heard as dropouts (2026-10-07). It needs a tenth of one core,
+     * and every pass of its loop sleeps (poll or usleep), so first in line
+     * costs the picture nothing it can notice. */
+    struct sched_param sp = { .sched_priority = 50 };
+    /* musl's sched_setscheduler() is a stub (ENOSYS): the system call itself. */
+    if (syscall(SYS_sched_setscheduler, 0, SCHED_FIFO, &sp) < 0)
+        fprintf(stderr, "glass-play: no real-time priority (%s): it may underrun under load\n", strerror(errno));
     fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
     unsigned char in[8192];
     size_t carry = 0;                 /* an odd byte left from the last read */
