@@ -60,6 +60,15 @@ md5sum -c <<SUMS
 595c4e0b50fa191f42eb5609cfbf92fd  aosp/aosp_glass-1_5.1.1_042016.zip
 SUMS
 
+# A static ffmpeg for the Glass (johnvansickle.com's armhf release build,
+# 7.0.2 in 2026-10): scripts/glass-view.sh pushes it into the Glass's RAM to
+# decode the desktop stream. MD5 as the site publishes beside the archive.
+mkdir -p ffmpeg-arm
+FA=ffmpeg-release-armhf-static.tar.xz
+[ -f ffmpeg-arm/$FA ] || curl -fL -o ffmpeg-arm/$FA https://johnvansickle.com/ffmpeg/releases/$FA
+curl -fsL -o ffmpeg-arm/$FA.md5 https://johnvansickle.com/ffmpeg/releases/$FA.md5
+(cd ffmpeg-arm && md5sum -c $FA.md5 && { ls -d ffmpeg-*-armhf-static > /dev/null 2>&1 || tar xJf $FA; })
+
 # Alpine's armv7 base.
 A=alpine-minirootfs-3.24.2-armv7.tar.gz
 AB=https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7

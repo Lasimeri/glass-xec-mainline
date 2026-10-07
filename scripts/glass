@@ -169,9 +169,15 @@ recovery_size() {
     return 1
 }
 
+# The desktop's key for the Glass: GLASS_SSH_KEY, else the dedicated
+# ~/.ssh/glass_ed25519 (made 2026-10-07, its public half baked into the
+# images), else ssh's defaults. The Glass's host key is pinned in out/.
 ssh_glass() {
     mkdir -p out
-    ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
+    local id=()
+    local k=${GLASS_SSH_KEY:-$HOME/.ssh/glass_ed25519}
+    [ -f "$k" ] && id=(-i "$k" -o IdentitiesOnly=yes)
+    ssh "${id[@]}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
         -o ConnectTimeout=5 "root@$GLASS_IP" "$@"
 }
 
