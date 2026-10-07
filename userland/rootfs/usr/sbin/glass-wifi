@@ -204,17 +204,23 @@ case "${1:-}" in
         ;;
     watch)
         # Every 10 s: joined with no address (the join's address step went
-        # wrong) -> the address set again; not joined for 30 s -> a
-        # reassociation, the networks in sight logged; for 90 s -> Wi-Fi
-        # restarted (down, up). A stored network in range then comes back
-        # by itself, as the home network did not on 2026-10-07.
+        # wrong) -> the address set again. Not joined for 30 s: if the
+        # access point is refusing (ASSOC-REJECT in wpa_supplicant's log
+        # since the last look), every attempt is stopped for 90 s and then
+        # one is made: the router kept refusing while attempts came every few
+        # seconds and took the first one after two quiet minutes (2026-10-07,
+        # status 1 after a reboot without leaving); otherwise the set-aside
+        # networks are enabled again and a reassociation asked for. Not
+        # joined for 180 s and nothing refused: Wi-Fi restarted (down, up).
         echo $$ > /run/glass-wifi-watch.pid
-        down=0
+        l=/var/log/wpa_supplicant.log
+        down=0 seen=$(wc -l < "$l" 2> /dev/null || echo 0)
         while :; do
             sleep 10
             st=$(wpa_cli -i wlan0 status 2> /dev/null | sed -n 's/^wpa_state=//p')
             if [ "$st" = COMPLETED ]; then
                 down=0
+                seen=$(wc -l < "$l" 2> /dev/null || echo 0)
                 if ! ip -4 addr show wlan0 | grep -q 'inet '; then
                     wlog "joined but no address: setting it again"
                     "$0" wlan0 CONNECTED
@@ -222,15 +228,24 @@ case "${1:-}" in
                 continue
             fi
             down=$((down + 10))
-            if [ $down = 30 ]; then
-                wlog "not joined for 30 s (state ${st:-none}): reassociating; in sight: $(wpa_cli -i wlan0 scan_results 2> /dev/null | awk -F '\t' 'NR > 1 && $5 != "" { printf "%s %s, ", $5, $3 }')"
-                # Networks wpa_supplicant set aside after failed tries come back
-                # (a plain reassociate left them aside: 3.5 min without Wi-Fi
-                # after a boot on 2026-10-07, the home network in sight).
+            now=$(wc -l < "$l" 2> /dev/null || echo 0)
+            [ "$now" -ge "$seen" ] || seen=0   # the log was trimmed
+            refused=$(tail -n +$((seen + 1)) "$l" 2> /dev/null | grep -c 'ASSOC-REJECT')
+            seen=$now
+            if [ $down -ge 30 ] && [ "$refused" -gt 0 ]; then
+                wlog "not joined for $down s, the access point refusing ($refused rejections, $(tail -n +1 "$l" | grep -o 'status_code=[0-9]*' | tail -n 1)): no attempts for 90 s, then one"
+                wpa_cli -i wlan0 disable_network all > /dev/null 2>&1
+                sleep 90
                 wpa_cli -i wlan0 enable_network all > /dev/null 2>&1
                 wpa_cli -i wlan0 reassociate > /dev/null 2>&1
-            elif [ $down -ge 90 ]; then
-                wlog "not joined for 90 s: restarting Wi-Fi"
+                seen=$(wc -l < "$l" 2> /dev/null || echo 0)
+                down=0
+            elif [ $down = 30 ]; then
+                wlog "not joined for 30 s (state ${st:-none}): reassociating; in sight: $(wpa_cli -i wlan0 scan_results 2> /dev/null | awk -F '\t' 'NR > 1 && $5 != "" { printf "%s %s, ", $5, $3 }')"
+                wpa_cli -i wlan0 enable_network all > /dev/null 2>&1
+                wpa_cli -i wlan0 reassociate > /dev/null 2>&1
+            elif [ $down -ge 180 ]; then
+                wlog "not joined for 180 s: restarting Wi-Fi"
                 "$0" down > /dev/null 2>&1
                 sleep 2
                 "$0" up > /dev/null 2>&1

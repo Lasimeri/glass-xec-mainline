@@ -12,5 +12,10 @@
 # Bluetooth (bluetoothd and D-Bus) only when glass-pan asks: two cores, and
 # the stream's decoder wants one of them.
 ::ctrlaltdel:/sbin/reboot
+# Leaving Wi-Fi properly first: wpa_supplicant tells the access point the
+# Glass is gone (a deauthentication), or the router kept the old connection
+# and refused every new one after the reboot, status 1, for minutes
+# (/var/log/wpa_supplicant.log, 2026-10-07).
+::shutdown:/usr/sbin/glass-wifi down
 ::shutdown:/bin/sync
 ::shutdown:/bin/umount -a -r

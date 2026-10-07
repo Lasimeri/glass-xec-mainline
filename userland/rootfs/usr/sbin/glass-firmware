@@ -1,0 +1,48 @@
+#!/bin/sh
+# glass-firmware: answers the firmware requests the kernel made before any
+# userspace existed, from /lib/firmware. Run early by rcS-rootfs.
+#   glass-firmware          load every pending request it has a file for
+#   glass-firmware list     what is pending, and whether the file is here
+#
+# Google's 3.4 kernel has no hotplug helper of its own (UEVENT_HELPER_PATH
+# empty) and registers the Ducati (Cortex-M3, omap-rproc) during its own
+# start, so its request for ducati-m3-core0-2gb.xem3 is made with nobody to
+# answer; it waits in /sys/class/firmware/ for 60 s and then gives up, and
+# the Ducati (camera, video codecs) never starts. The rootfs is up well
+# within that time: each pending request names its file in its uevent
+# (FIRMWARE=), and is answered through loading and data, the kernel's
+# protocol for a userspace helper. Requests made later go to mdev
+# (/proc/sys/kernel/hotplug), which reads the same directory.
+set -u
+log() { echo "glass-firmware: $*" > /dev/kmsg 2> /dev/null; echo "glass-firmware: $(date +%T) $*" >> /run/glass/rcS.log 2> /dev/null; echo "glass-firmware: $*"; }
+for d in /sys/class/firmware/*/; do
+    [ -f "$d/loading" ] || continue
+    name=$(sed -n 's/^FIRMWARE=//p' "$d/uevent" 2> /dev/null)
+    dev=$(basename "$d")
+    f=/lib/firmware/$name
+    if [ "${1:-}" = list ]; then
+        echo "$dev wants ${name:-?}: $([ -n "$name" ] && [ -f "$f" ] && echo "here" || echo "not here")"
+        continue
+    fi
+    if [ -n "$name" ] && [ -f "$f" ]; then
+        echo 1 > "$d/loading" && cat "$f" > "$d/data" && echo 0 > "$d/loading" &&
+            log "$dev: $name loaded ($(wc -c < "$f") bytes)"
+        # Whether the remote processor came up: its rpmsg channels within
+        # 30 s, and what the kernel said, kept in /var/log (the kernel log
+        # is soon overwritten), in the background so the boot goes on.
+        (
+            i=0
+            while [ $i -lt 30 ] && [ -z "$(ls /sys/bus/rpmsg/devices 2> /dev/null)" ]; do sleep 1; i=$((i + 1)); done
+            {
+                echo "--- $(date '+%F %T') $dev $name"
+                echo "rpmsg channels after ${i} s: $(ls /sys/bus/rpmsg/devices 2> /dev/null | tr '\n' ' ')"
+                echo "devices: $(ls /dev | grep -E 'rpmsg|omx|dce' | tr '\n' ' ')"
+                dmesg | grep -iE 'rproc|remoteproc|rpmsg|ducati|ipu|virtio' | tail -n 30
+            } >> /var/log/glass-firmware.log 2>&1
+        ) &
+    else
+        echo -1 > "$d/loading" 2> /dev/null
+        log "$dev: ${name:-?} not in /lib/firmware, refused"
+    fi
+done
+exit 0

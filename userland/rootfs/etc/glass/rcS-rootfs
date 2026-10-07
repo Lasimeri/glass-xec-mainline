@@ -31,6 +31,11 @@ hostname glass
 echo "1 4 1 7" > /proc/sys/kernel/printk
 log "rootfs up"
 
+# Firmware the kernel asked for before userspace existed (the Ducati's,
+# for the camera and the video codecs), from /lib/firmware: the requests
+# wait 60 s and this is well within it (glass-firmware).
+[ -x /usr/sbin/glass-firmware ] && /usr/sbin/glass-firmware > /dev/null 2>&1
+
 # The image is written smaller than the partition: grow it once (online).
 if [ ! -f /etc/glass/resized ]; then
     dev=$(awk '$2 == "/" && $1 ~ /^\/dev\// { print $1 }' /proc/mounts | tail -n 1)

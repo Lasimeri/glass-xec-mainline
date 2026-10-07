@@ -51,9 +51,39 @@ if [ -n "$m" ] && ! pactl list short modules | awk -v m="$m" '$1 == m' | grep -q
     pactl unload-module "$m"
     m=""
 fi
+created=0
 if [ -z "$m" ]; then
     pactl load-module module-null-sink sink_name="$sink" sink_properties="$props" rate=48000 channels=2 > /dev/null
+    created=1
 fi
+
+# The output's last state (volume and mute) kept across restarts and logins
+# (the user, 2026-10-07): saved on every change by a watcher for as long as
+# this runs, given back when the output had to be made anew. An output that
+# already existed keeps what it has (it may have been changed since).
+state_file=${XDG_STATE_HOME:-$HOME/.local/state}/glass-xec/glass-output
+mkdir -p "$(dirname "$state_file")"
+if [ $created = 1 ] && [ -s "$state_file" ]; then
+    read -r v mu < "$state_file"
+    case "${v:-}" in '' | *[!0-9]*) ;; *) pactl set-sink-volume "$sink" "$v%" ;; esac
+    case "${mu:-}" in 0 | 1) pactl set-sink-mute "$sink" "$mu" ;; esac
+    echo "glass-audio: $(date +%T) output made anew: volume $v%, mute $mu, as last left" >> "$log"
+fi
+save_state() {
+    local v mu
+    v=$(pactl get-sink-volume "$sink" 2> /dev/null | grep -o '[0-9]*%' | head -n 1 | tr -d %)
+    mu=$(pactl get-sink-mute "$sink" 2> /dev/null | awk '{ print ($2 == "yes") ? 1 : 0 }')
+    [ -n "$v" ] || return 0
+    [ "$v $mu" = "$(cat "$state_file" 2> /dev/null)" ] && return 0
+    echo "$v $mu" > "$state_file.new" && mv "$state_file.new" "$state_file"
+}
+save_state
+(
+    id=$(pactl list short sinks | awk -v n="$sink" '$2 == n { print $1; exit }')
+    pactl subscribe 2> /dev/null | while read -r ev; do
+        case "$ev" in *"'change' on sink #$id") save_state ;; esac
+    done
+) &
 
 # The desktop's volume control for the Glass: the slider and mute of the
 # "Google Glass" output go to glass-audio control on the Glass, once at the
