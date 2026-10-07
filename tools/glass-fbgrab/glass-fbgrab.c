@@ -1,7 +1,7 @@
 /* glass-fbgrab: what the Glass's display shows, to stdout, as rows that
  * changed (the other way from glass-fb: the Glass's screen on the desktop).
  *
- *   glass-fbgrab [-i MS] [/dev/fb0]        (scripts/glass screen: the window)
+ *   glass-fbgrab [-i MS] [/dev/fb0]        (glass-display.service: the window)
  *
  * The graphics layer's picture is read where the display controller scans
  * it (DISPC GFX_BA0 through /dev/mem: glass-console's page 0, or a page

@@ -88,8 +88,18 @@ On the desktop:
 | when | command |
 | --- | --- |
 | after changing or pulling this repository | `scripts/glass update`: packages, scripts and tools on the running Glass brought up to date, tools rebuilt on the Glass only where their source changed, only what changed restarted; settings above kept; nothing flashed |
-| on a new desktop install | `scripts/glass setup-desktop`: the autostart entries, the supervisors started, and what is missing with its fix |
+| on a new desktop install | `scripts/glass setup-desktop`: the five services written, enabled and started (`out/glass-fbview` built for the screen window), and what is missing with its fix |
 | a fresh rootfs | `scripts/glass build`, then `scripts/glass flash-rootfs` (asks first); the image carries everything above |
+
+## Letting it charge
+The streams draw nearly all a desktop USB port gives: with the camera stream alone the battery took 52 mA, with every stream stopped 97 mA, and with the panel blanked as well 426 mA (2026-10-07, the gauge's `current_now`):
+
+```sh
+systemctl --user disable --now glass-viewd glass-display glass-camera glass-audio   # glass-tap stays: control over ssh
+scripts/glass local-camera off
+scripts/glass ssh 'echo 1 > /sys/class/graphics/fb0/blank'                         # 0 lights it again
+```
+`systemctl --user enable --now` with the same names brings them back.
 
 ## When something is off
 

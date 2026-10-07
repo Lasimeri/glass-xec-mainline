@@ -4,10 +4,11 @@
  * after each record, sent to mpv as one raw frame (shown as it comes,
  * untimed). mpv is started at the first record, which gives the size.
  *
- *   glass ssh glass-fbgrab | glass-fbview [TITLE]   (scripts/glass-display.sh)
+ *   glass ssh glass-fbgrab | glass-fbview [TITLE]   (glass-display.service)
  *
  * Ends when stdin ends or the window is closed (its pipe breaks).
- * Built on the desktop by scripts/glass-display.sh into out/.
+ * Built on the desktop into out/ by scripts/glass setup-desktop, which also
+ * writes glass-display.service (the pipe above, restarted 5 s after an exit).
  */
 #define _GNU_SOURCE
 #include <signal.h>
