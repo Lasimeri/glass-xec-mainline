@@ -49,6 +49,11 @@
 #                               shell, stream, sound, volume, tap
 #   glass addr                  the address the verbs would use now (Wi-Fi,
 #                               USB or tailnet)
+#   glass camera [WxH] [FPS] [KBIT/S]
+#                               the Glass's camera in a window here: H.264
+#                               from the Ducati's encoder, no sound (default
+#                               960x540, half the camera's 1920x1080 video
+#                               size, at 15/s and 768 kbit/s)
 #   glass collect               glass-collect on the Glass into out/collect-DATE.tar
 #   glass serial                the USB serial console (/dev/ttyACM*)
 # Every write says what it will do and asks for a typed "yes" (or --yes).
@@ -321,7 +326,8 @@ case "$verb" in
         cp -a userland/initramfs/. "$stage/"
         cp -a userland/rootfs/. "$stage/"
         mkdir -p "$stage/usr/local/src" "$stage/usr/share/glass"
-        for t in glass-fb glass-tap glass-console glass-play; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        for t in glass-fb glass-tap glass-console glass-play glass-camera; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        cp -a tools/glass-camera/omx "$stage/usr/local/src/"   # the OMX headers glass-camera is built with
         font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
         if [ -f "$font" ]; then gzip -dc "$font" > "$stage/usr/share/glass/console.psf"; else say "no $font (kbd): the console font is not sent"; fi
         cp scripts/on-glass/update.sh "$stage/.update.sh"
@@ -599,6 +605,11 @@ case "$verb" in
         # Reboots the running Glass N times and times everything that comes
         # back by itself (scripts/glass-reboot-test.sh).
         exec scripts/glass-reboot-test.sh "${1:-1}"
+        ;;
+
+    camera)
+        # The Glass's camera in its own window here (scripts/glass-camera.sh).
+        GLASS_IP=$GLASS_IP exec scripts/glass-camera.sh "$@"
         ;;
 
     addr)

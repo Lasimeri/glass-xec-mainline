@@ -2,7 +2,7 @@
 
 The latest mainline Linux kernel and a small Alpine Linux userland for **Google Glass Explorer Edition XE-C** (the 2 GB revision, TI OMAP4430), built with no Python anywhere. The goal is Glass as a head-mounted Linux terminal into the desktop's Claude Code session.
 
-> **Status (2026-10-07): in daily use on one XE-C**, with Google's own XE24 kernel (3.4) and this Alpine userland on its eMMC: the desktop's monitor streamed at 15 frames/s, the desktop's sound on the bone conduction speaker, a touchpad tap as the voice mute, Wi-Fi with a fixed home address, Tailscale for every other network. Day to day: [docs/daily-use.md](docs/daily-use.md). The mainline kernel images are built and checked offline but not yet proven on the hardware; the first hardware session is in [docs/hardware-test.md](docs/hardware-test.md). Hardware facts come from Google's own Glass kernel sources (3.4.83, codename "notle"), cross-checked against independent teardowns ([docs/build-log.md](docs/build-log.md)).
+> **Status (2026-10-07): in daily use on one XE-C**, with Google's own XE24 kernel (3.4) and this Alpine userland on its eMMC: the desktop's monitor streamed at 15 frames/s, the desktop's sound on the bone conduction speaker, a touchpad tap as the voice mute, the camera in a window on the desktop (H.264 from the Ducati's own encoder, `glass camera`), Wi-Fi with a fixed home address, Tailscale for every other network. Day to day: [docs/daily-use.md](docs/daily-use.md). The mainline kernel images are built and checked offline but not yet proven on the hardware; the first hardware session is in [docs/hardware-test.md](docs/hardware-test.md). Hardware facts come from Google's own Glass kernel sources (3.4.83, codename "notle"), cross-checked against independent teardowns ([docs/build-log.md](docs/build-log.md)).
 
 ## Approach
 - **Kernel:**
@@ -97,7 +97,8 @@ Then [docs/hardware-test.md](docs/hardware-test.md), step by step. `scripts/glas
 | `userland/initramfs/`, `userland/rootfs/` | `/init`, inittab, rcS, `glass-*` commands |
 | `tools/bootimg/` | Android boot image v0 in C |
 | `tools/nopython/` | the `python*` shims that log and fail |
-| `docs/daily-use.md` | what starts by itself, how to reach the Glass, the command for each setting, keeping it current |
+| `docs/daily-use.md` | what starts by itself, how to reach the Glass, the camera, the command for each setting, keeping it current |
+| `docs/ducati-omx.md` | the Ducati's OMX over rpmsg as glass-camera speaks it: ioctls, packets, buffers, the camera's ports |
 | `docs/plan.md`, `docs/build-log.md`, `docs/hardware-test.md` | the plan, the build log with the hardware table, the first hardware session |
 | `dl/`, `src/`, `build/`, `out/`, `firmware/`, `backup/` | fetched, built or backed up: never committed |
 

@@ -57,13 +57,14 @@ done
 # 4. Tools: built from the staged source when it differs from the one the
 # binary was built from (kept in /usr/local/src after a good build only).
 built=""
-for t in glass-fb glass-tap glass-console glass-play; do
+for t in glass-fb glass-tap glass-console glass-play glass-camera; do
     src=./usr/local/src/$t.c
     [ -f "$src" ] || continue
     if cmp -s "$src" "/usr/local/src/$t.c" && [ -x "/usr/local/bin/$t" ]; then continue; fi
     case $t in
         glass-fb) flags="-O3 -mfpu=neon -mfloat-abi=hard"; libs="-lpthread" ;;
         glass-play) flags="-O2"; libs="-lasound" ;;
+        glass-camera) flags="-O2 -I./usr/local/src/omx"; libs="-lpthread" ;;
         *) flags="-O2"; libs="" ;;
     esac
     say "building $t"

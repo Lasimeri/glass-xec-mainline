@@ -111,7 +111,10 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     # (the stock kernel has no framebuffer console), the same way.
     # glass-play (tools/glass-play): the sound at a fixed delay however the
     # clocks drift; built with -lasound (alsa-lib-dev on the Glass).
-    for t in glass-fb glass-tap glass-console glass-play; do
+    # glass-camera (tools/glass-camera): the camera and the H.264 encoder on
+    # the Ducati, spoken to over rpmsg (docs/ducati-omx.md); built with the
+    # OMX headers in tools/glass-camera/omx.
+    for t in glass-fb glass-tap glass-console glass-play glass-camera; do
         if [ -f "$top/out/$t" ]; then
             mkdir -p "$r/usr/local/bin" "$r/usr/local/src"
             cp "$top/out/$t" "$r/usr/local/bin/$t"

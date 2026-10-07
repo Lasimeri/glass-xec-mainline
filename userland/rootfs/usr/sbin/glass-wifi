@@ -210,7 +210,9 @@ case "${1:-}" in
         # one is made: the router kept refusing while attempts came every few
         # seconds and took the first one after two quiet minutes (2026-10-07,
         # status 1 after a reboot without leaving); otherwise the set-aside
-        # networks are enabled again and a reassociation asked for. Not
+        # networks are enabled again and a reassociation asked for. wlan0
+        # itself down for 20 s (the driver turned a hung radio off): Wi-Fi
+        # restarted at once. Not
         # joined for 180 s and nothing refused: Wi-Fi restarted (down, up).
         echo $$ > /run/glass-wifi-watch.pid
         l=/var/log/wpa_supplicant.log
@@ -232,7 +234,17 @@ case "${1:-}" in
             [ "$now" -ge "$seen" ] || seen=0   # the log was trimmed
             refused=$(tail -n +$((seen + 1)) "$l" 2> /dev/null | grep -c 'ASSOC-REJECT')
             seen=$now
-            if [ $down -ge 30 ] && [ "$refused" -gt 0 ]; then
+            if [ $down -ge 20 ] && ! ip link show wlan0 2> /dev/null | grep -qE '[<,]UP[,>]'; then
+                # The radio itself stopped: the driver declares the chip hung
+                # (an SDIO timeout) and turns it off, wlan0 down, and nothing
+                # short of a restart brings it back (2026-10-07, once as the
+                # camera started).
+                wlog "wlan0 down for $down s (the driver turned the radio off after a hang): restarting Wi-Fi"
+                "$0" down > /dev/null 2>&1
+                sleep 2
+                "$0" up > /dev/null 2>&1
+                down=0
+            elif [ $down -ge 30 ] && [ "$refused" -gt 0 ]; then
                 wlog "not joined for $down s, the access point refusing ($refused rejections, $(tail -n +1 "$l" | grep -o 'status_code=[0-9]*' | tail -n 1)): no attempts for 90 s, then one"
                 wpa_cli -i wlan0 disable_network all > /dev/null 2>&1
                 sleep 90

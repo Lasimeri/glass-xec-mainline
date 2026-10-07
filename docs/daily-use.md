@@ -29,6 +29,10 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 1500 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames. When the Glass changes network, every session follows by itself: a path guard beside each one (`scripts/glass-pathguard.sh`) ends a tailnet session as soon as home Wi-Fi or the USB cable answers, and a home session after two missed pings; its supervisor starts it again on the new path, in that path's mode. The Glass shell window is left alone (it keeps working over the tailnet, and reopens if its path dies).
 
+## The camera
+
+`scripts/glass camera` opens the Glass's camera in its own window on the desktop: 960x540 (half the camera's 1920x1080 video size), 15 frames/s, H.264 at 768 kbit/s, no sound. Other values as `scripts/glass camera WxH FPS KBIT/S`. The work is done by the Ducati (the OMAP4's Cortex-M3 cores with Google's firmware): the OV5680 camera and the H.264 encoder there share the frames in place, the Glass's own CPU only passes on the stream. Closing the window stops the camera. On the Glass itself, `glass-camera -i` lists what the camera and the encoder offer; the protocol is in `docs/ducati-omx.md`.
+
 `scripts/glass status` shows the whole state in one table: how the Glass is reachable, battery, board temperature, CPU clock, display and sound settings, what runs on it, the last stream report and the desktop's supervisors.
 
 ## Settings
