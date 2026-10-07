@@ -25,7 +25,9 @@ while :; do
     # one went away (glass-pathguard.sh); it starts again there.
     addr=$("$top/scripts/glass" addr 2> /dev/null || true)
     set -m
-    GLASS_IP=$addr "$top/scripts/glass" ssh /usr/local/bin/glass-tap < /dev/null 2>> "$log" |
+    # 9>&-: the session and the guard do not hold the single-instance lock
+    # (a session left behind once kept a new supervisor from starting).
+    GLASS_IP=$addr "$top/scripts/glass" ssh /usr/local/bin/glass-tap < /dev/null 2>> "$log" 9>&- |
         while read -r g; do
             case "$g" in
                 tap)
@@ -37,7 +39,7 @@ while :; do
     session=$!
     set +m
     group=$(ps -o pgid= -p "$session" 2> /dev/null | tr -d ' ')
-    "$top/scripts/glass-pathguard.sh" "$addr" "-${group:-$session}" >> "$log" 2>&1 &
+    "$top/scripts/glass-pathguard.sh" "$addr" "-${group:-$session}" >> "$log" 2>&1 9>&- &
     guard=$!
     wait $session
     kill $guard 2> /dev/null

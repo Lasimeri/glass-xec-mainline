@@ -318,12 +318,12 @@ case "$verb" in
                 sed -n 's/.*glass-fb: \([0-9.]*\) frames\/s shown.*, \([0-9]*\) late slots.*/\1 frames\/s, \2 late slots in the last 5 s/p')
             printf "  %-12s %s\n" stream "${last:-no report yet}"
             n=0; sup=""
-            for s in glass-viewd glass-audio glass-tap glass-camerad; do
-                if pgrep -f "scripts/$s[.]sh$" > /dev/null; then sup="$sup${sup:+, }$s up"; else sup="$sup${sup:+, }$s DOWN"; fi
-                [ -f "$HOME/.config/autostart/$s.desktop" ] && n=$((n + 1))
+            for s in glass-viewd glass-audio glass-tap glass-camera; do
+                sup="$sup${sup:+, }$s $(systemctl --user is-active "$s.service" 2> /dev/null)"
+                [ "$(systemctl --user is-enabled "$s.service" 2> /dev/null)" = enabled ] && n=$((n + 1))
             done
-            printf "  %-12s %s\n" supervisors "$sup"
-            printf "  %-12s %s\n" autostart "$n of 4 at login (glass setup-desktop sets them up)"
+            printf "  %-12s %s\n" services "$sup"
+            printf "  %-12s %s\n" at-login "$n of 4 enabled (glass setup-desktop sets them up)"
         fi
         ;;
 
@@ -358,19 +358,35 @@ case "$verb" in
 
     setup-desktop)
         # This desktop's side, repeatable: the four supervisors (picture,
-        # sound, tap, camera) start at login from ~/.config/autostart, and now if
-        # they are not running; then what they need, each with its fix.
-        a=$HOME/.config/autostart
-        mkdir -p "$a"
-        entry() {   # SUPERVISOR NAME COMMENT
-            printf '[Desktop Entry]\nType=Application\nName=%s\nComment=%s\nExec=%s\nX-KDE-autostart-phase=2\nNoDisplay=true\n' \
-                "$2" "$3" "$top/scripts/$1.sh" > "$a/$1.desktop"
+        # sound, tap, camera) as systemd user services: one copy each,
+        # started with the graphical session, started again 5 s after any
+        # exit (a camera window closed or crashed comes back while the Glass
+        # is up); then what they need, each with its fix. One stopped for a
+        # while: systemctl --user stop glass-camera (start to bring it back).
+        u=$HOME/.config/systemd/user
+        mkdir -p "$u"
+        unit() {   # SERVICE DESCRIPTION
+            printf '[Unit]\nDescription=%s\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n[Service]\nExecStart=%s\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
+                "$2" "$top/scripts/$1.sh" > "$u/$1.service"
         }
-        entry glass-viewd "Glass view" "The desktop's monitor and a shell on the Google Glass whenever it is up (glass-xec scripts/glass-viewd.sh)"
-        entry glass-audio "Glass audio" "Desktop sound to the Google Glass while it is on the network (glass-xec scripts/glass-audio.sh)"
-        entry glass-tap "Glass tap mute" "A tap on the Google Glass touchpad toggles the voice mute (glass-xec scripts/glass-tap.sh)"
-        entry glass-camerad "Glass camera" "The Google Glass camera in its own window whenever the Glass comes up (glass-xec scripts/glass-camerad.sh)"
-        say "autostart: $a/glass-viewd.desktop, glass-audio.desktop, glass-tap.desktop, glass-camerad.desktop"
+        unit glass-viewd "Google Glass: the desktop's monitor and a shell on the Glass whenever it is up (glass-xec)"
+        unit glass-audio "Google Glass: the desktop's sound on the Glass while it is on the network (glass-xec)"
+        unit glass-tap "Google Glass: a tap on the touchpad toggles the voice mute (glass-xec)"
+        unit glass-camera "Google Glass: the camera in its own window whenever the Glass is up (glass-xec)"
+        say "services: $u/glass-viewd.service, glass-audio.service, glass-tap.service, glass-camera.service"
+        # What these replace: the login autostart entries, and any supervisor
+        # running outside its service (from an autostart entry or a shell),
+        # ended with its process group, so each runs once, under systemd.
+        for s in glass-viewd glass-audio glass-tap glass-camerad; do rm -f "$HOME/.config/autostart/$s.desktop"; done
+        for s in glass-viewd glass-audio glass-tap glass-camerad glass-camera; do
+            for p in $(pgrep -f "scripts/$s[.]sh$"); do
+                grep -q "/$s\.service" "/proc/$p/cgroup" 2> /dev/null && continue
+                g=$(ps -o pgid= -p "$p" | tr -d ' ')
+                if [ -n "$g" ] && [ "$g" = "$p" ]; then kill -- "-$g" 2> /dev/null || true; else kill "$p" 2> /dev/null || true; fi
+            done
+        done
+        systemctl --user daemon-reload
+        systemctl --user enable --now glass-viewd.service glass-audio.service glass-tap.service glass-camera.service 2>&1 | grep -v "^Created symlink" >&2 || true
         # The sound's switches in the application launcher (and KRunner:
         # type "glass audio"); a keyboard shortcut can be given to any of
         # them in System Settings, Shortcuts.
@@ -384,13 +400,8 @@ case "$verb" in
         launcher glass-audio-glass "Glass audio: sound to the Glass" glass "The desktop's sound and the voice to the Google Glass, back to the stereo by itself when it leaves"
         launcher glass-audio-stereo "Glass audio: sound to the stereo" stereo "The desktop's sound and the voice to the stereo, and it stays there"
         say "launchers: $l/glass-audio-toggle.desktop, glass-audio-glass.desktop, glass-audio-stereo.desktop"
-        for s in glass-viewd glass-audio glass-tap glass-camerad; do
-            if pgrep -f "scripts/$s[.]sh$" > /dev/null; then
-                say "$s: running"
-            else
-                setsid -f "$top/scripts/$s.sh" > /dev/null 2>&1 < /dev/null
-                say "$s: started"
-            fi
+        for s in glass-viewd glass-audio glass-tap glass-camera; do
+            say "$s: $(systemctl --user is-active "$s.service")"
         done
         [ -f "$HOME/.ssh/glass_ed25519" ] || say "missing ~/.ssh/glass_ed25519, the key the Glass trusts: ssh-keygen -t ed25519 -N '' -f ~/.ssh/glass_ed25519, then rebuild the images (or add the .pub to the Glass's /root/.ssh/authorized_keys)"
         [ -x "${DESK:-$HOME/deskpilot/target/release/desk}" ] || say "missing the desk tool (screen capture): cargo build --release in ~/deskpilot"
