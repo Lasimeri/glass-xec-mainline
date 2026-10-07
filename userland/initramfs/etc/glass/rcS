@@ -27,9 +27,11 @@ if [ -d "$p" ]; then
     echo 0 > "$p/enabled"
     sleep 1
     echo 1 > "$p/enabled"
-    # 80 of 223: the user halved the original 160 twice, then doubled it
-    # back (2026-10-07).
-    echo "${GLASS_BRIGHTNESS:-80}" > "$p/brightness"
+    # The kept brightness (glass-brightness N), else 80 of 223: the user
+    # halved the original 160 twice, then doubled it back (2026-10-07).
+    b=$(cat /etc/glass/brightness 2> /dev/null)
+    case "$b" in '' | *[!0-9]*) b=80 ;; esac
+    echo "${GLASS_BRIGHTNESS:-$b}" > "$p/brightness"
     echo 0 > /sys/devices/platform/omapfb/graphics/fb0/blank
     echo "U:640x360p-312" > /sys/devices/platform/omapfb/graphics/fb0/mode
     log "stock kernel: notle panel enabled"

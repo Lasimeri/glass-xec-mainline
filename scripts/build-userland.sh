@@ -24,7 +24,10 @@ apk() {
 }
 key=${GLASS_SSH_PUBKEY:-}
 if [ -z "$key" ]; then
-    for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
+    # The dedicated key first: it is the one `scripts/glass ssh` offers
+    # (IdentitiesOnly); an image trusting only the general key would lock
+    # the desktop's tools out.
+    for k in "$HOME/.ssh/glass_ed25519.pub" "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
         [ -f "$k" ] && { key=$k; break; }
     done
 fi
@@ -73,9 +76,14 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     rm -rf "$r"
     mkdir -p "$r"
     tar -xzf "$mini" -C "$r"
+    # Sound (amixer, libasound for glass-play), Tailscale (the Glass on the
+    # tailnet from any network), and the compiler the tools are rebuilt with
+    # on the Glass by `glass update` (the same list scripts/on-glass/update.sh
+    # installs when missing).
     apk --root "$r" add dropbear dropbear-dbclient dropbear-scp i2c-tools devmem2 busybox-extras \
         wpa_supplicant iw wireless-regdb bluez bluez-deprecated bluez-tools dbus \
-        tmux kbd e2fsprogs e2fsprogs-extra evtest
+        tmux kbd e2fsprogs e2fsprogs-extra evtest \
+        alsa-utils alsa-lib tailscale gcc musl-dev linux-headers alsa-lib-dev
     common "$r"
     cp -a "$top/userland/rootfs/." "$r/"
     chmod 755 "$r/etc/glass/rcS-rootfs" "$r"/usr/sbin/glass-*

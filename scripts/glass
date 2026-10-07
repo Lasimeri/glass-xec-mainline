@@ -4,7 +4,17 @@
 #   glass build                 userland, kernel (initramfs and both DTBs built
 #                               in), images (scripts/build-*.sh)
 #   glass check                 static userland checks and out/SHA256SUMS
-#   glass status                what fastboot, adb and the USB link see
+#   glass status                what fastboot, adb and the USB link see, then
+#                               the running Glass and this desktop's side as
+#                               a table (network, tailnet, battery, heat,
+#                               display, sound, what runs, the stream)
+#   glass update                the running Glass brought up to date with this
+#                               checkout, nothing flashed: packages, scripts,
+#                               tools rebuilt where changed, restarts; user
+#                               settings kept (scripts/on-glass/update.sh)
+#   glass setup-desktop         this desktop's side: picture, sound and tap
+#                               supervisors at login and started now, and what
+#                               they need, each with its fix
 #   glass root-boot             fastboot boot out/boot-xe24-adbroot.img: stock
 #                               XE24 Android with root adb, in RAM only
 #   glass backup [--with-userdata]
@@ -46,7 +56,7 @@ cd "$top"
 # (out/glass-ip, written by glass-wifi-copy and by `glass ip`), else the
 # name "glass" when the router resolves it (the Glass announces it with a
 # DHCP lease), each if it answers a ping; else the USB link if it answers;
-# else the Glass by its MAC on this subnet; else its tailnet address; else
+# else its tailnet address; else the Glass by its MAC on this subnet; else
 # USB.
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
@@ -61,11 +71,19 @@ if [ -z "$GLASS_IP" ]; then
         n=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
         if [ -n "$n" ] && ping -c 1 -W 1 "$n" > /dev/null 2>&1; then GLASS_IP=$n; fi
     fi
-    # The last address went quiet: the USB link if it is there, else the
-    # Glass by its Wi-Fi MAC (out/glass-mac) in the neighbour table after one
-    # round of pings over the desktop's own subnet (about a second).
+    # The last address went quiet: the USB link if it is there; else the
+    # Glass on the tailnet (tailscaled on the Glass, named "glass"; the
+    # phone's hotspot, anywhere else), the desktop's tailscale giving the
+    # address, no DNS needed; else the Glass by its Wi-Fi MAC (out/glass-mac)
+    # in the neighbour table after one round of pings over the desktop's own
+    # subnet (about a second, 254 pings: last, as the supervisors ask every
+    # few seconds while the Glass is away).
     usb=0
     [ -z "$GLASS_IP" ] && ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && usb=1
+    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && command -v tailscale > /dev/null; then
+        ts=$(tailscale ip -4 glass 2> /dev/null | head -n 1 || true)
+        if [ -n "$ts" ] && ping -c 1 -W 2 "$ts" > /dev/null 2>&1; then GLASS_IP=$ts; fi
+    fi
     if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && [ -s out/glass-mac ]; then
         mac=$(head -n 1 out/glass-mac)
         net=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | cut -d. -f1-3)
@@ -78,13 +96,6 @@ if [ -z "$GLASS_IP" ]; then
                 echo "$found" > out/glass-ip
             fi
         fi
-    fi
-    # Not on this network (the phone's hotspot, anywhere else): the Glass on
-    # the tailnet (tailscaled on the Glass, named "glass"), if it answers;
-    # the desktop's tailscale gives the address, no DNS needed.
-    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && command -v tailscale > /dev/null; then
-        ts=$(tailscale ip -4 glass 2> /dev/null | head -n 1 || true)
-        if [ -n "$ts" ] && ping -c 1 -W 2 "$ts" > /dev/null 2>&1; then GLASS_IP=$ts; fi
     fi
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
@@ -266,9 +277,85 @@ case "$verb" in
 
     status)
         if command -v fastboot > /dev/null; then echo "fastboot:"; fastboot devices; fi
-        if command -v adb > /dev/null; then adb devices | sed 1d | sed 's/^/adb: /'; fi
+        if command -v adb > /dev/null; then adb devices | sed 1d | sed '/^$/d; s/^/adb: /'; fi
         if ping -c 1 -W 1 "$GLASS_IP" > /dev/null 2>&1; then say "$GLASS_IP answers (glass ssh)"; else say "$GLASS_IP does not answer"; fi
         ls /dev/ttyACM* 2> /dev/null | sed 's/^/serial: /' || true
+        # The running Glass and this desktop's side, as a table.
+        if rows=$(ssh_glass 'sh -s' < scripts/on-glass/status.sh 2> /dev/null); then
+            echo
+            echo "Glass ($GLASS_IP)"
+            echo "$rows" | awk -F '\t' '{ printf "  %-12s %s\n", $1, $2 }'
+            echo
+            echo "Desktop"
+            r=${XDG_RUNTIME_DIR:-/tmp}
+            last=$(grep 'glass-fb: .*frames/s shown' "$r/glass-viewd.log" 2> /dev/null | tail -n 1 |
+                sed -n 's/.*glass-fb: \([0-9.]*\) frames\/s shown.*, \([0-9]*\) late slots.*/\1 frames\/s, \2 late slots in the last 5 s/p')
+            printf "  %-12s %s\n" stream "${last:-no report yet}"
+            n=0; sup=""
+            for s in glass-viewd glass-audio glass-tap; do
+                if pgrep -f "scripts/$s[.]sh$" > /dev/null; then sup="$sup${sup:+, }$s up"; else sup="$sup${sup:+, }$s DOWN"; fi
+                [ -f "$HOME/.config/autostart/$s.desktop" ] && n=$((n + 1))
+            done
+            printf "  %-12s %s\n" supervisors "$sup"
+            printf "  %-12s %s\n" autostart "$n of 3 at login (glass setup-desktop sets them up)"
+        fi
+        ;;
+
+    update)
+        # The running Glass brought up to date with this checkout, nothing
+        # flashed: scripts/on-glass/update.sh does the work there (packages,
+        # files, tools rebuilt on the Glass where their source changed,
+        # restarts of what changed; user settings kept). Binaries it builds
+        # are copied back to out/ for the next rootfs build.
+        ssh_glass true < /dev/null > /dev/null 2>&1 || die "the Glass does not answer at $GLASS_IP"
+        say "updating the Glass at $GLASS_IP"
+        stage=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/glass-update.XXXXXX")
+        trap 'rm -rf "$stage"' EXIT
+        cp -a userland/initramfs/. "$stage/"
+        cp -a userland/rootfs/. "$stage/"
+        mkdir -p "$stage/usr/local/src" "$stage/usr/share/glass"
+        for t in glass-fb glass-tap glass-console glass-play; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
+        if [ -f "$font" ]; then gzip -dc "$font" > "$stage/usr/share/glass/console.psf"; else say "no $font (kbd): the console font is not sent"; fi
+        cp scripts/on-glass/update.sh "$stage/.update.sh"
+        tar -C "$stage" -cf - . | ssh_glass 'rm -rf /tmp/glass-update && mkdir -p /tmp/glass-update && tar -C /tmp/glass-update -xf -' ||
+            die "the files did not reach the Glass"
+        rc=0
+        report=$(ssh_glass 'sh /tmp/glass-update/.update.sh' < /dev/null) || rc=$?
+        echo "$report" | grep -v '^BUILT:' || true
+        for t in $(echo "$report" | sed -n 's/^BUILT://p'); do
+            ssh_glass "cat /usr/local/bin/$t" < /dev/null > "out/$t.new" && mv "out/$t.new" "out/$t" && say "out/$t kept for the rootfs build"
+        done
+        [ $rc = 0 ] || die "the update stopped (above)"
+        ;;
+
+    setup-desktop)
+        # This desktop's side, repeatable: the three supervisors (picture,
+        # sound, tap) start at login from ~/.config/autostart, and now if
+        # they are not running; then what they need, each with its fix.
+        a=$HOME/.config/autostart
+        mkdir -p "$a"
+        entry() {   # SUPERVISOR NAME COMMENT
+            printf '[Desktop Entry]\nType=Application\nName=%s\nComment=%s\nExec=%s\nX-KDE-autostart-phase=2\nNoDisplay=true\n' \
+                "$2" "$3" "$top/scripts/$1.sh" > "$a/$1.desktop"
+        }
+        entry glass-viewd "Glass view" "The desktop's monitor and a shell on the Google Glass whenever it is up (glass-xec scripts/glass-viewd.sh)"
+        entry glass-audio "Glass audio" "Desktop sound to the Google Glass while it is on the network (glass-xec scripts/glass-audio.sh)"
+        entry glass-tap "Glass tap mute" "A tap on the Google Glass touchpad toggles the voice mute (glass-xec scripts/glass-tap.sh)"
+        say "autostart: $a/glass-viewd.desktop, glass-audio.desktop, glass-tap.desktop"
+        for s in glass-viewd glass-audio glass-tap; do
+            if pgrep -f "scripts/$s[.]sh$" > /dev/null; then
+                say "$s: running"
+            else
+                setsid -f "$top/scripts/$s.sh" > /dev/null 2>&1 < /dev/null
+                say "$s: started"
+            fi
+        done
+        [ -f "$HOME/.ssh/glass_ed25519" ] || say "missing ~/.ssh/glass_ed25519, the key the Glass trusts: ssh-keygen -t ed25519 -N '' -f ~/.ssh/glass_ed25519, then rebuild the images (or add the .pub to the Glass's /root/.ssh/authorized_keys)"
+        [ -x "${DESK:-$HOME/deskpilot/target/release/desk}" ] || say "missing the desk tool (screen capture): cargo build --release in ~/deskpilot"
+        command -v gst-launch-1.0 > /dev/null || say "missing GStreamer: install gstreamer, gst-plugin-pipewire, gst-plugins-bad"
+        command -v tailscale > /dev/null || say "no tailscale here: the Glass is then reachable only on this network and by USB"
+        [ -x "$HOME/tts079/ptt079" ] || say "no ~/tts079/ptt079: a tap on the Glass has no mute to toggle"
         ;;
 
     root-boot)

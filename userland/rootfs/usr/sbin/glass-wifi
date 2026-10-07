@@ -74,6 +74,28 @@ address() {
         kill -USR2 "$p" 2> /dev/null; sleep 1; kill -USR1 "$p" 2> /dev/null
         echo "glass-wifi: $(date +%T) on $1 (another network): new DHCP lease asked for" >> /run/glass/rcS.log
     fi
+    clock
+}
+
+# The clock, once a boot: no battery-backed time survives a power-off, and
+# TLS (Tailscale's login, apk's mirrors) refuses a date in 2000. Tried every
+# 10 s for two minutes from the first address on, in the background, one
+# loop at a time; /run/glass/clock-ok marks success.
+clock() {
+    [ -f /run/glass/clock-ok ] && return 0
+    mkdir -p /run/glass
+    (
+        flock -n 8 || exit 0
+        i=0
+        while [ $i -lt 12 ]; do
+            if ntpd -n -q -p pool.ntp.org > /dev/null 2>&1; then
+                touch /run/glass/clock-ok
+                echo "glass-wifi: $(date +%T) clock set" >> /run/glass/rcS.log
+                exit 0
+            fi
+            sleep 10; i=$((i + 1))
+        done
+    ) 8> /run/glass/clock.lock < /dev/null > /dev/null 2>&1 &
 }
 
 case "${1:-}" in
@@ -133,9 +155,6 @@ case "${1:-}" in
         # each beacon and TCP stalls on them (the stream showed one frame
         # every two seconds, 2026-10-07); the cost is some battery.
         iw dev wlan0 set power_save off 2> /dev/null
-        # The clock: no battery-backed time survives a power-off here, and
-        # TLS (apk's mirrors) refuses a date in 2000; once joined, set it.
-        (sleep 5; ntpd -n -q -p pool.ntp.org > /dev/null 2>&1) &
         # The address follows the network joined: wpa_cli runs this script
         # on each connection (the wlan0 case below), which sets the fixed
         # address of a network listed with glass-wifi static, or asks DHCP

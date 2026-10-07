@@ -1,0 +1,22 @@
+#!/bin/sh
+# glass-brightness: the display's brightness, kept across boots.
+#   glass-brightness        what it is now, and the most the panel allows
+#   glass-brightness N      set it now and at every boot (1 up to the
+#                           panel's limit, brightness_limit: 223)
+# The value is the panel's own scale (notle-dpi), kept in
+# /etc/glass/brightness; /etc/glass/rcS sets it at boot (default 80, the
+# user's choice on 2026-10-07).
+p=/sys/devices/platform/omapdss/manager2/panel-notle-dpi
+f=/etc/glass/brightness
+[ -d "$p" ] || { echo "glass-brightness: no notle panel here ($p)" >&2; exit 1; }
+max=$(cat "$p/brightness_limit" 2> /dev/null || echo 223)
+if [ -z "${1:-}" ]; then
+    echo "brightness $(cat "$p/brightness") of $max (kept: $(cat "$f" 2> /dev/null || echo "80, the default"))"
+    exit 0
+fi
+case "$1" in *[!0-9]*) echo "glass-brightness N (1 to $max)" >&2; exit 1 ;; esac
+[ "$1" -ge 1 ] && [ "$1" -le "$max" ] || { echo "glass-brightness N (1 to $max)" >&2; exit 1; }
+echo "$1" > "$p/brightness" || exit 1
+mkdir -p /etc/glass
+echo "$1" > "$f"
+echo "brightness $1 of $max, kept for the next boot"
