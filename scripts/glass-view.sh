@@ -96,7 +96,11 @@ glass_ffmpeg || exit 1
 # each; one Cortex-A9 decodes this size at over 30 frames/s) and draws each
 # frame as it arrives. Expected glass-to-glass: about a tenth of a second.
 echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, $fps frames/s $([ "$pace_src" = 0 ] && echo "at most, unpaced" || echo "paced") -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
-echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
+if [ "$out" = window ]; then
+    echo "glass-view: the first run asks in the portal's dialog which window to share: pick the Glass screen (KDE Wayland Compositor)" >&2
+else
+    echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
+fi
 "$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
     pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw" \
     "${rate[@]}" \
