@@ -134,7 +134,7 @@ if [ "$out" = follow ]; then
     exit
 fi
 # One rate stage, on the GPU: the capture asks KWin for at most SRC_FPS
-# (default 30; max-framerate is honoured, a fixed framerate is refused, and
+# (default  9/8 of FPS; max-framerate is honoured, a fixed framerate is refused, and
 # KWin under-delivers against the cap, so asking a little above FPS keeps
 # every output slot fed with a fresh frame) and re-sends its last frame
 # while the screen is still; a queue takes frames off PipeWire's thread at
@@ -146,7 +146,12 @@ fi
 # at 6:1 (3840x2160 to 640x360) skips pixels, so text shimmers. Halving
 # steps first (bilinear at exactly 2:1 averages each 2x2 block, a true box
 # filter), then the compositor's last step is mild (960 to 640, 1.5:1).
-src_fps=${SRC_FPS:-30}
+# Measured on a 144 Hz monitor (2026-10-07, KWin 6.7, left monitor): a cap of
+# 30 delivers 26.8/s, so the 24/s compositor skips about 3 source frames a
+# second (motion jumps); a cap of 27 delivers 24.45/s, 77% of intervals
+# exactly 6 refreshes (41.67 ms), so it skips about one frame every 2 s;
+# 24 under-delivers (22.4/s, repeats). Default: 9/8 of the stream rate.
+src_fps=${SRC_FPS:-$(( fps * 9 / 8 ))}
 steps=()
 if [ "$out" != window ]; then
     sg=$("$desk" outputs 2>/dev/null | awk -v o="$out:" '$1 == o { print $2 }')
