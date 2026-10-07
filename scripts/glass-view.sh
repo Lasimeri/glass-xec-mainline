@@ -48,10 +48,19 @@ command -v gst-launch-1.0 > /dev/null || { echo "glass-view: gst-launch-1.0 is n
 for e in pipewiresrc cudaupload cudaconvertscale nvh264enc h264parse mpegtsmux; do
     gst-inspect-1.0 "$e" > /dev/null 2>&1 || { echo "glass-view: GStreamer element $e is missing" >&2; exit 1; }
 done
+# The monitor: as given, else the last one given (out/glass-output; the
+# portal's remembered permission is for that one too), else the primary.
+if [ -z "$out" ] && [ -s "$top/out/glass-output" ]; then
+    out=$(head -n 1 "$top/out/glass-output")
+fi
 if [ -z "$out" ]; then
     out=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/Output:/ { o=$3 } /priority 1/ { print o; exit }')
     [ -n "$out" ] || out=DP-1
 fi
+case "$out" in
+    window | follow) ;;
+    *) mkdir -p "$top/out"; echo "$out" > "$top/out/glass-output" ;;
+esac
 # OUTPUT "window": one window instead of a monitor (the portal's dialog asks
 # which; the Glass screen of glass-screen.sh is the one meant), captured at
 # the window's own size, so a 1280x720 window reaches the Glass at an exact
