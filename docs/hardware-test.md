@@ -148,13 +148,14 @@ The Glass joins its stored networks at boot (`rcS-rootfs`), announces the hostna
 scripts/glass-view.sh                      # the primary monitor, 24 frames/s paced; Ctrl-C stops
 BUFFER_MS=42 scripts/glass-view.sh         # over Wi-Fi: a one-frame jitter buffer on the Glass
 PACE=0 scripts/glass-view.sh DP-2 24       # another output, frames as they come
+scripts/glass-view.sh follow               # pixel perfect: a 640x360 window of the primary monitor, 1:1, following the pointer
 scripts/glass-screen.sh start              # a screen for the glasses: a nested KWin, 1280x720 at scale 2,
                                            # pinned to the top-left of the primary monitor
 scripts/glass-screen.sh run konsole        # launch a program into it (WAYLAND_DISPLAY=wayland-glass)
 scripts/glass-view.sh window               # stream that window alone (the dialog asks which: "KDE Wayland Compositor")
 ```
 The nested screen exists because a 4K desktop scaled to 640x360 is unreadable: inside it everything draws at twice the size, and the stream takes the window at an exact 2:1, so text reaches the glasses as a 640x360 session would draw it. KWin 6.7 has no runtime virtual output and NVIDIA's driver no writeback connector, hence a nested compositor rather than a virtual monitor; a window rule (`kwinrulesrc`, group `glass-screen`) holds it in place.
-Works on the stock-kernel image (step 6). Capture is the compositor's own screencast through the desktop portal (`desk cast`, ~/deskpilot; one share dialog the first time), scaled and encoded H.264 on the GPU (NVENC); the stream rides the ssh session; the Glass decodes it with ffmpeg (on the rootfs, or pushed into RAM) on one thread into `/dev/fb0`. Nothing holds a frame; the Glass decodes 65 frames/s at this size. Kernel capture (`kmsgrab`) does not work on NVIDIA's driver (tiled 16-bit float scanout).
+`follow` is the mode that makes text readable: nothing is scaled; the window pans when the pointer nears its edge (`desk cursor` reports the pointer through a KWin script; `tools/glass-viewport` moves the window on the GPU). On the Glass, `glass-fb` (compiled on the Glass, kept in `out/glass-fb` for the rootfs build) shows every frame on the display's vertical sync by flipping between the framebuffer's three pages, tear-free. Works on the stock-kernel image (step 6). Capture is the compositor's own screencast through the desktop portal (`desk cast`, ~/deskpilot; one share dialog the first time), scaled and encoded H.264 on the GPU (NVENC); the stream rides the ssh session; the Glass decodes it with ffmpeg (on the rootfs, or pushed into RAM) on one thread into `/dev/fb0`. Nothing holds a frame; the Glass decodes 65 frames/s at this size. Kernel capture (`kmsgrab`) does not work on NVIDIA's driver (tiled 16-bit float scanout).
 
 ## 10. The desktop side of `glass-term`
 - **tmux:** Claude Code has to run inside tmux for the Glass to attach to the same session: `tmux new -A -s claude`, then `claude ...` inside it. Today `~/tts079/claude-voice.sh` starts it directly in Konsole; that has to change.
