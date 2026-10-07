@@ -10,7 +10,7 @@
  * it (pan) and the sync waited for (312 fields a second: at most 3 ms).
  *
  * -r FPS paces presentation: frames are shown at exactly 1/FPS intervals
- * on the Glass's own clock, N frames (-b, default 1) of cushion absorbing
+ * on the Glass's own clock, N frames (-b, default 1, at most 6) of cushion absorbing
  * the link's jitter, so motion is even however the packets arrived. A
  * frame that is not there at its slot is shown as soon as it comes and the
  * schedule re-anchors; frames piling up beyond the cushion are dropped,
@@ -58,7 +58,7 @@
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, unsigned int)
 #endif
 
-#define RING 4
+#define RING 8   /* frames held: the cushion (-b) goes up to RING - 2 */
 
 /* OMAP4 display controller (TRM: DISPC at 0x48041000), as the initramfs's
  * display handoff already uses them. */

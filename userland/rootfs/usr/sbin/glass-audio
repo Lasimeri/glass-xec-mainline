@@ -18,19 +18,27 @@
 #   glass-audio test               a tone on each output in turn, low to high
 #                                  pitch: earphone 440 Hz, handsfree 660 Hz,
 #                                  headset 880 Hz
-#   glass-audio delay [MS]         how far the sound runs behind the
-#                                  desktop, kept here on the Glass
-#                                  (/etc/glass/audio-delay, default 150; a
-#                                  playing session follows within 2 s)
-#   glass-audio play               raw s16le 48 kHz mono on stdin to the ABE's
-#                                  Multimedia stream (both channels), that
-#                                  delay behind (glass-play); to the kept
-#                                  route, or the headset outputs while an
-#                                  earbud is plugged in
+#   glass-audio delay [remote] [MS]
+#                                  how far the sound runs behind the
+#                                  desktop, kept here on the Glass: on the
+#                                  home network (/etc/glass/audio-delay,
+#                                  default 150) or over the tailnet
+#                                  (audio-delay-remote, default 400: the
+#                                  picture is held longer there); a playing
+#                                  session follows within 2 s
+#   glass-audio play [opus]        s16le 32 kHz mono on stdin (or Opus in
+#                                  MPEG-TS over the tailnet) to the ABE's
+#                                  Multimedia stream, that delay behind
+#                                  (glass-play); to the kept route, or the
+#                                  headset outputs while an earbud is in
 # The route chosen last is kept in /etc/glass/audio-route.
 set -u
 conf=/etc/glass/audio-route
 delay=/etc/glass/audio-delay
+delay_remote=/etc/glass/audio-delay-remote
+# The stream's sample rate: 32 kHz, all the bone conduction speaker
+# reproduces (the user, 2026-10-07); a third less to carry than 48 kHz.
+rate=32000
 mix() { amixer -q -c 0 cset "name=$1" "$2" > /dev/null 2>&1 || echo "glass-audio: $1 = $2 refused" >&2; }
 common() {
     mix 'DL1 Mixer Multimedia' on
@@ -87,12 +95,16 @@ case "${1:-}" in
         set -- $(cat "$conf") "${2:-50}"
         route "$1" "$3" && echo "$1 $3" > "$conf" ;;
     delay)
-        if [ -n "${2:-}" ]; then
-            case "$2" in *[!0-9]*) echo "glass-audio delay MS (50 to 2000)" >&2; exit 1 ;; esac
-            [ "$2" -ge 50 ] && [ "$2" -le 2000 ] || { echo "glass-audio delay MS (50 to 2000)" >&2; exit 1; }
-            echo "$2" > "$delay"
+        # glass-audio delay [MS]          on the home network (and USB)
+        # glass-audio delay remote [MS]   over the tailnet (hotspot, away)
+        f=$delay; d=150; shift
+        if [ "${1:-}" = remote ]; then f=$delay_remote; d=400; shift; fi
+        if [ -n "${1:-}" ]; then
+            case "$1" in *[!0-9]*) echo "glass-audio delay [remote] MS (50 to 2000)" >&2; exit 1 ;; esac
+            [ "$1" -ge 50 ] && [ "$1" -le 2000 ] || { echo "glass-audio delay [remote] MS (50 to 2000)" >&2; exit 1; }
+            echo "$1" > "$f"
         fi
-        echo "$(cat "$delay" 2> /dev/null || echo 150) ms" ;;
+        echo "$(cat "$f" 2> /dev/null || echo $d) ms" ;;
     off) quiet; mix 'DL1 Mixer Multimedia' off ;;
     test)
         route earphone 50; tone 440 1.5; sleep 1
@@ -117,11 +129,28 @@ case "${1:-}" in
         # delay) however the desktop's and the Glass's clocks drift; aplay
         # fell 650 ms behind in twenty minutes. aplay stays the fallback.
         [ -f "$delay" ] || echo 150 > "$delay"
+        [ -f "$delay_remote" ] || echo 400 > "$delay_remote"
+        # One session at a time: a session whose network went away (the
+        # Glass moved between home and the hotspot) can still hold the
+        # device, and every new one then failed "Resource busy".
+        p=$(pidof glass-play aplay glass-opusdec)
+        if [ -n "$p" ]; then
+            kill $p 2> /dev/null; sleep 1
+            p=$(pidof glass-play aplay glass-opusdec); [ -z "$p" ] || kill -9 $p 2> /dev/null
+        fi
         exec 3<&0
-        if [ -x /usr/local/bin/glass-play ]; then
-            /usr/local/bin/glass-play -f "$delay" <&3 &
+        if [ "${2:-}" = opus ]; then
+            # Over the tailnet the desktop sends Opus (48 kbit/s, not 768) in
+            # MPEG-TS; ffmpeg decodes it under its own name (glass-opusdec, a
+            # link) so the stream's decoder is never mistaken for it; the
+            # delay is the remote one, the picture there being held longer.
+            [ -e /usr/local/bin/glass-opusdec ] || ln -s ffmpeg /usr/local/bin/glass-opusdec
+            /usr/local/bin/glass-opusdec -hide_banner -loglevel error -probesize 32 -analyzeduration 0 \
+                -f mpegts -i pipe:0 -f s16le -ar $rate -ac 1 - <&3 | /usr/local/bin/glass-play -r $rate -f "$delay_remote" &
+        elif [ -x /usr/local/bin/glass-play ]; then
+            /usr/local/bin/glass-play -r $rate -f "$delay" <&3 &
         else
-            aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="$(( $(cat "$delay") * 1000 ))" <&3 &
+            aplay -q -D plughw:0,0 -f S16_LE -r $rate -c 1 -t raw --buffer-time="$(( $(cat "$delay") * 1000 ))" <&3 &
         fi
         a=$!
         while kill -0 $a 2> /dev/null; do
@@ -130,5 +159,5 @@ case "${1:-}" in
             [ "$n" = "$cur" ] || { cur=$n; use; }
         done
         wait $a 2> /dev/null ;;
-    *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

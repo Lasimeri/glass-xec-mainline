@@ -42,6 +42,9 @@
 #   glass ssh [CMD...]          root on the Glass (GLASS_IP, the name glass, the
 #                               last Wi-Fi address, or USB 172.16.42.1)
 #   glass ip                    the Glass's Wi-Fi address, remembered for next time
+#                               (when it answers from here)
+#   glass addr                  the address the verbs would use now (Wi-Fi,
+#                               USB or tailnet)
 #   glass collect               glass-collect on the Glass into out/collect-DATE.tar
 #   glass serial                the USB serial console (/dev/ttyACM*)
 # Every write says what it will do and asks for a typed "yes" (or --yes).
@@ -581,9 +584,17 @@ case "$verb" in
         [ -n "$a" ] || die "the Glass has no Wi-Fi address (glass ssh glass-wifi status)"
         m=$(ssh_glass "cat /sys/class/net/wlan0/address" < /dev/null | tr -d '\r' | head -n 1)
         mkdir -p out
-        echo "$a" > out/glass-ip
+        # Remembered only when it answers from here: on the phone's hotspot
+        # the Wi-Fi address is behind the phone and the tailnet is the way.
+        if ping -c 1 -W 1 "$a" > /dev/null 2>&1; then echo "$a" > out/glass-ip; fi
         [ -n "$m" ] && echo "$m" > out/glass-mac
         echo "$a $m"
+        ;;
+
+    addr)
+        # The address the other verbs would use now (the lookup above), for
+        # scripts that open several connections and want one path for all.
+        echo "$GLASS_IP"
         ;;
 
     collect)

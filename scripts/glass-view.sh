@@ -26,7 +26,23 @@ top=$(cd "$(dirname "$0")/.." && pwd)
 W=640; H=360
 out=${1:-}
 fps=${2:-24}
-bitrate=${BITRATE:-3000}
+# One address for every connection of this stream (glass addr: home Wi-Fi,
+# USB or the tailnet), and the mode it means: over the tailnet (the phone's
+# hotspot, away) the link is a cellular one through WireGuard, so the video
+# goes at 1200 kbit/s (not 3000) and the Glass holds four frames (267 ms at
+# 15/s) against the link's jitter (the user, 2026-10-07).
+if [ -z "${GLASS_IP:-}" ]; then
+    GLASS_IP=$("$top/scripts/glass" addr 2> /dev/null || true)
+fi
+export GLASS_IP
+remote=0
+case "$GLASS_IP" in 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) remote=1 ;; esac
+if [ $remote = 1 ]; then
+    bitrate=${BITRATE:-1200}
+    echo "glass-view: the Glass is reached over the tailnet ($GLASS_IP): $bitrate kbit/s, a deeper cushion" >&2
+else
+    bitrate=${BITRATE:-3000}
+fi
 bitrate=${bitrate%k}
 # BUFFER_MS: a jitter buffer on the Glass for a link that jitters (Wi-Fi):
 # the decoder takes that much lead at the start and then paces display by
@@ -108,7 +124,12 @@ done
 # cushion fixes; the user chose 15 a second instead (2026-10-07), one
 # frame then being 67 ms, and the picture landing near the 150 ms the
 # Glass holds the sound back (glass-audio delay).
-cushion=${CUSHION:-1}
+# Over the tailnet four frames (CUSHION to change it; glass-fb holds up to 6).
+if [ $remote = 1 ]; then cushion=${CUSHION:-4}; else cushion=${CUSHION:-1}; fi
+# One stream at a time on the Glass: a session whose network went away (the
+# Glass moved between home and the hotspot) leaves its decoder blocked on a
+# dead connection, deaf to SIGTERM; it goes first, by force if it must.
+takeover='p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi;'
 if [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ]; then
     sink="$decode -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b $cushion"
     echo "glass-view: the Glass shows YUYV frames on its video overlay (converted by the display controller), on its vertical sync, $fps/s with $cushion frame(s) of cushion (glass-fb)" >&2
@@ -119,6 +140,7 @@ else
     sink="$decode -pix_fmt bgra -f fbdev /dev/fb0"
     echo "glass-view: no glass-fb on the Glass: ffmpeg writes the visible page directly (no sync, no pacing)" >&2
 fi
+sink="$takeover $sink"
 
 # OUTPUT "follow": pixel perfect. A 640x360 window of the primary monitor,
 # one pixel to one pixel, that follows the pointer (desk cursor, through a

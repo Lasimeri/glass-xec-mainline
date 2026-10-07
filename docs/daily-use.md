@@ -8,7 +8,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 | part | what it does |
 | --- | --- |
-| Wi-Fi (`glass-wifi up`) | joins the stored networks, home first (`priority`); the address follows the network joined: fixed at home, DHCP elsewhere |
+| Wi-Fi (`glass-wifi up`) | joins the stored networks by `priority`: the phone's hotspot first when it is on, else home; the address follows the network joined: fixed at home, DHCP elsewhere |
 | clock | set from the internet once an address exists, retried for two minutes |
 | Tailscale (`tailscaled`) | the Glass on the tailnet as `glass`, reachable from the desktop on any network |
 | display shell (`glass-console`) | a shell with a blinking cursor and two status lines (network and address, tailnet address, battery), shown whenever no stream is |
@@ -42,7 +42,8 @@ On the Glass (in its shell, or from the desktop as `scripts/glass ssh 'COMMAND'`
 | sound delay behind the desktop | `glass-audio delay 150` (applies within 2 s) | 150 ms |
 | brightness | `glass-brightness 80` (1 to 223) | 80 |
 | a fixed address on a network | `glass-wifi static HomeMixed 192.168.0.80/24 192.168.0.1`; `glass-wifi static HomeMixed off` for DHCP | home: 192.168.0.80 |
-| which network first | `glass-wifi priority HomeMixed 10` (higher first) | home 10, hotspot 0 |
+| which network first | `glass-wifi priority "O+ Open" 20` (higher first) | hotspot 20, home 10 |
+| this network now | `glass-wifi use "O+ Open"` (until `glass-wifi use auto` or a reboot) | by priority |
 | a new Wi-Fi network | from the desktop, without typing the passphrase: `scripts/glass-wifi-copy --from USER@HOST "NAME"`; on the Glass: `glass-wifi add "NAME"` | HomeMixed, O+ Open |
 
 On the desktop:

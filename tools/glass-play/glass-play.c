@@ -1,7 +1,8 @@
-/* glass-play: raw s16le 48 kHz mono from stdin to the Glass's speaker, at
- * a fixed delay however the two clocks drift.
+/* glass-play: raw s16le mono from stdin (48 kHz, or -r RATE: 32000 for the
+ * bone conduction speaker, which reproduces no more) to the Glass's
+ * speaker, at a fixed delay however the two clocks drift.
  *
- *   glass-play [-t TARGET_MS | -f FILE] [-d DEVICE]   (default 150 ms, plughw:0,0)
+ *   glass-play [-t TARGET_MS | -f FILE] [-r RATE] [-d DEVICE]   (150 ms, 48000, plughw:0,0)
  *
  * The desktop's sound clock and the Glass's converter never run at quite
  * the same rate. aplay took what came and fell behind: measured on
@@ -41,14 +42,18 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RATE 48000
-#define RING (RATE * 2)          /* two seconds */
-#define CHUNK 240                /* 5 ms written at a time */
+static int rate = 48000;          /* -r: the stream's sample rate (int: the comparisons with signed device counts stay signed on 32-bit ARM) */
+#define RATE rate
+#define RATE_MAX 48000
+#define RING ((unsigned) (RATE * 2))   /* two seconds */
+#define RING_MAX (RATE_MAX * 2)
+#define CHUNK (RATE * 5 / 1000)  /* 5 ms written at a time */
+#define CHUNK_MAX (RATE_MAX * 5 / 1000)
 #define DEVICE_US 40000          /* the device's own buffer */
 #define TOL (RATE * 5 / 1000)    /* 5 ms either side of the target */
 #define CUT (RATE * 80 / 1000)   /* a lasting error this large is corrected at once */
 
-static int16_t ring[RING];
+static int16_t ring[RING_MAX];
 static unsigned rhead, rcount;   /* oldest sample, samples held */
 
 static double now_s(void) {
@@ -84,9 +89,11 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-t") && i + 1 < argc) target_ms = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-f") && i + 1 < argc) tfile = argv[++i];
+        else if (!strcmp(argv[i], "-r") && i + 1 < argc) rate = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dev = argv[++i];
-        else { fprintf(stderr, "glass-play [-t TARGET_MS | -f FILE] [-d DEVICE] < s16le-48k-mono\n"); return 1; }
+        else { fprintf(stderr, "glass-play [-t TARGET_MS | -f FILE] [-r RATE] [-d DEVICE] < s16le-mono\n"); return 1; }
     }
+    if (rate < 8000 || rate > RATE_MAX) { fprintf(stderr, "glass-play: -r between 8000 and %d\n", RATE_MAX); return 1; }
     if (tfile) target_ms = read_ms(tfile, target_ms);
     if (target_ms < 50) target_ms = 50;
     long target = (long) RATE * target_ms / 1000;
@@ -101,8 +108,8 @@ int main(int argc, char **argv) {
     if (err < 0) { fprintf(stderr, "glass-play: %s: %s\n", dev, snd_strerror(err)); return 1; }
     snd_pcm_uframes_t bufsize, persize;
     snd_pcm_get_params(pcm, &bufsize, &persize);
-    fprintf(stderr, "glass-play: %s, target %d ms, device buffer %lu samples (period %lu)%s\n",
-            dev, target_ms, (unsigned long) bufsize, (unsigned long) persize, probe ? ", probe on" : "");
+    fprintf(stderr, "glass-play: %s at %d Hz, target %d ms, device buffer %lu samples (period %lu)%s\n",
+            dev, rate, target_ms, (unsigned long) bufsize, (unsigned long) persize, probe ? ", probe on" : "");
 
     fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
     unsigned char in[8192];
@@ -112,7 +119,7 @@ int main(int argc, char **argv) {
     double smooth = -1;              /* the delay averaged over about 2 s */
     long quiet = RATE;                /* samples of quiet before the next one (probe) */
     double report = now_s() + 30;
-    int16_t out[CHUNK + 1];
+    int16_t out[CHUNK_MAX + 1];
 
     for (;;) {
         /* Everything that has arrived, at once. */
@@ -160,7 +167,7 @@ int main(int argc, char **argv) {
                 long pad = target - total;
                 if (pad > avail - CHUNK) pad = avail - CHUNK;
                 if (pad > 0) {
-                    static int16_t zero[RATE / 2];
+                    static int16_t zero[RATE_MAX / 2];
                     if (pad > RATE / 2) pad = RATE / 2;
                     if (snd_pcm_writei(pcm, zero, pad) > 0) { pads++; queued += pad; }
                     total = (long) rcount + queued;
@@ -169,14 +176,14 @@ int main(int argc, char **argv) {
             }
             int mode = smooth > target + TOL ? 1 : smooth < target - TOL ? -1 : 0;
             unsigned n = 0;
-            while (n < CHUNK && rcount > 0) {
+            while (n < (unsigned) CHUNK && rcount > 0) {
                 int16_t s = ring[rhead];
                 rhead = (rhead + 1) % RING; rcount--;
                 if (mode == 1 && ++phase % 1000 == 0 && rcount > 0) {   /* one left out */
                     s = ring[rhead]; rhead = (rhead + 1) % RING; rcount--; dropped++;
                 }
                 out[n++] = s;
-                if (mode == -1 && ++phase % 1000 == 0 && n < CHUNK) { out[n++] = s; doubled++; }
+                if (mode == -1 && ++phase % 1000 == 0 && n < (unsigned) CHUNK) { out[n++] = s; doubled++; }
                 if (probe) {
                     int loud = s > 8000 || s < -8000;
                     if (loud && quiet >= RATE * 3 / 10)

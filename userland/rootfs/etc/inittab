@@ -2,10 +2,13 @@
 ::sysinit:/etc/glass/rcS-rootfs
 ::respawn:/etc/glass/console uart
 ::respawn:/etc/glass/console usb
-# The Glass display (tty1 on the framebuffer console; glass-display runs
-# other programs there).
+# The Glass display: glass-console on the stock kernel (no framebuffer
+# console), tty1 on mainline.
 ::respawn:/etc/glass/console display
-::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
+# SSH, keys only; -K 5: a keepalive every 5 s, so a session whose network
+# went away (the Glass moved between home and the hotspot) ends within
+# about 15 s instead of holding the sound device and a decoder forever.
+::respawn:/usr/sbin/dropbear -F -E -R -s -p 22 -K 5
 # Bluetooth (bluetoothd and D-Bus) only when glass-pan asks: two cores, and
 # the stream's decoder wants one of them.
 ::ctrlaltdel:/sbin/reboot

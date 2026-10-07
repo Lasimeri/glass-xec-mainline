@@ -102,6 +102,14 @@ if has "$changed" /usr/sbin/glass-wifi; then
 fi
 if has "$changed" /etc/inittab; then
     kill -HUP 1 && restarted="$restarted init"
+    # The ssh listener's flags may have changed (-K 5): it is restarted,
+    # init respawning it at once; open sessions (this one too) are its
+    # children and stay.
+    sleep 1
+    for p in $(pidof dropbear); do
+        [ "$(awk '{ print $4 }' /proc/$p/stat 2> /dev/null)" = 1 ] && kill "$p"
+    done
+    restarted="$restarted ssh-listener"
 fi
 if [ -x /usr/sbin/tailscaled ] && ! pidof tailscaled > /dev/null; then
     mkdir -p /var/lib/tailscale /run/tailscale

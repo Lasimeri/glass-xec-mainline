@@ -8,7 +8,7 @@
 # while the Glass answers; everything playing moves to it. The Glass plays it
 # on its bone conduction transducer, or on the earbud while one is plugged
 # in (glass-audio play picks, and follows plugging). Its monitor is
-# read as 48 kHz mono 16-bit (96 KB/s; the bone conduction transducer is
+# read as 32 kHz mono 16-bit (64 KB/s; the bone conduction transducer is
 # one channel) and sent down an ssh session to the Glass, where glass-audio
 # play hands it to ALSA through the route chosen with glass-audio route.
 # When the session ends (the Glass off or out of Wi-Fi), the previous
@@ -29,6 +29,8 @@ top=$(cd "$(dirname "$0")/.." && pwd)
 run=${XDG_RUNTIME_DIR:-/tmp}
 log=$run/glass-audio.log
 sink=glass
+# 32 kHz: all the bone conduction speaker reproduces (the user, 2026-10-07).
+rate=32000
 
 if [ "${1:-}" = stop ]; then
     for p in $(pgrep -f "scripts/glass-audio[.]sh$"); do kill "$p"; done 2> /dev/null
@@ -45,35 +47,71 @@ if ! pactl list short sinks | awk '{print $2}' | grep -qx "$sink"; then
 fi
 
 prev=""
+# Streams that follow the default: those of applications (a client) playing
+# on FROM, moved to TO. Streams of modules (no client: the voice setup's
+# echo canceller, loopbacks) are routed on purpose and never moved; moving
+# every stream put the echo canceller's output on the Glass (2026-10-07).
+move_streams() {   # FROM TO
+    local from
+    from=$(pactl list short sinks | awk -v n="$1" '$2 == n { print $1; exit }')
+    [ -n "$from" ] || return 0
+    for s in $(pactl list short sink-inputs | awk -v f="$from" '$2 == f && $3 != "-" { print $1 }'); do
+        pactl move-sink-input "$s" "$2" 2> /dev/null
+    done
+}
 restore() {
     [ -n "$prev" ] || return 0
     pactl set-default-sink "$prev"
-    for s in $(pactl list short sink-inputs | awk '{print $1}'); do pactl move-sink-input "$s" "$prev" 2> /dev/null; done
+    move_streams "$sink" "$prev"
     echo "glass-audio: $(date +%T) back to $prev" >> "$log"
     prev=""
 }
 trap 'kill $(jobs -p) 2> /dev/null; restore; exit 0' INT TERM
 
 echo "glass-audio: $(date +%T) started" >> "$log"
+# A real output to come back to: the stereo, else the first hardware sink.
+real_output() {
+    pactl list short sinks | awk '$2 ~ /^alsa_output\./ && $2 ~ /Schiit/ { print $2; f = 1; exit } END { exit !f }' ||
+        pactl list short sinks | awk '$2 ~ /^alsa_output\./ { print $2; exit }'
+}
 # Left as the default by an earlier run that was killed mid-session: give
-# the default back to a real output (the stereo, the first hardware sink).
+# the default back to a real output.
 if [ "$(pactl get-default-sink)" = "$sink" ]; then
-    prev=$(pactl list short sinks | awk '$2 ~ /^alsa_output\./ && $2 ~ /Schiit/ { print $2; exit }')
-    [ -n "$prev" ] || prev=$(pactl list short sinks | awk '$2 ~ /^alsa_output\./ { print $2; exit }')
+    prev=$(real_output)
     restore
 fi
 while :; do
-    # Whenever the Glass answers: its own transducer needs nothing plugged in.
-    if "$top/scripts/glass" ssh true < /dev/null > /dev/null 2>&1; then
+    # Whenever the Glass answers: its own transducer needs nothing plugged
+    # in. One address for the whole session (glass addr: home Wi-Fi, USB or
+    # the tailnet).
+    addr=$("$top/scripts/glass" addr 2> /dev/null || true)
+    if [ -n "$addr" ] && GLASS_IP=$addr "$top/scripts/glass" ssh true < /dev/null > /dev/null 2>&1; then
         cur=$(pactl get-default-sink)
-        [ "$cur" = "$sink" ] || prev=$cur
+        # Already the Glass (a session that ended without giving it back):
+        # the stereo is what comes back afterwards, never the Glass itself.
+        [ "$cur" = "$sink" ] && cur=$(real_output)
+        prev=$cur
         pactl set-default-sink "$sink"
-        for s in $(pactl list short sink-inputs | awk '{print $1}'); do pactl move-sink-input "$s" "$sink" 2> /dev/null; done
-        echo "glass-audio: $(date +%T) to the Glass (was $prev)" >> "$log"
+        move_streams "$prev" "$sink"
         # In the background with a wait: a stop signal then runs the trap at
         # once (bash defers traps until a foreground pipeline ends).
-        parec -d "$sink.monitor" --format=s16le --rate=48000 --channels=1 --latency-msec=10 --raw 2>> "$log" |
-            "$top/scripts/glass" ssh "glass-audio play" 2>> "$log" &
+        case "$addr" in
+            100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+                # The tailnet (the hotspot, away): Opus at 48 kbit/s instead
+                # of 768 kbit/s of raw samples; the Glass decodes it and
+                # holds it by its remote delay (glass-audio delay remote).
+                echo "glass-audio: $(date +%T) to the Glass over the tailnet at $addr, Opus 48 kbit/s (was $prev)" >> "$log"
+                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" |
+                    ffmpeg -hide_banner -loglevel error -f s16le -ar $rate -ac 1 -i - -c:a libopus -b:a 48k \
+                        -application lowdelay -frame_duration 40 -f mpegts -muxdelay 0 -flush_packets 1 - 2>> "$log" |
+                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play opus" 2>> "$log" &
+                ;;
+            *)
+                echo "glass-audio: $(date +%T) to the Glass at $addr (was $prev)" >> "$log"
+                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" |
+                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play" 2>> "$log" &
+                ;;
+        esac
         wait $!
         restore
     fi

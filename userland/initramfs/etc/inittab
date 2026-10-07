@@ -8,6 +8,6 @@
 # other programs there).
 ::respawn:/etc/glass/console display
 # SSH on the USB network, keys only (/root/.ssh/authorized_keys).
-::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
+::respawn:/usr/sbin/dropbear -F -E -R -s -p 22 -K 5
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/bin/sync

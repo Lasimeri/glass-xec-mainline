@@ -14,6 +14,8 @@
 #                                     DHCP there (home: 192.168.0.80/24, the
 #                                     user's choice 2026-10-07); SSID off
 #                                     for DHCP again; alone, the list
+#   glass-wifi use SSID | auto        join that network now (until "auto" or
+#                                     a reboot), or choose by priority again
 #   glass-wifi up | down | scan | status | list
 c=/etc/wpa_supplicant/wpa_supplicant.conf
 die() { echo "glass-wifi: $*" >&2; exit 1; }
@@ -135,8 +137,8 @@ case "${1:-}" in
         ;;
     priority)
         # With several stored networks in range the highest number is
-        # joined (wpa_supplicant's priority; 0 when unset): home above the
-        # phone's hotspot keeps the Glass home while both are there.
+        # joined (wpa_supplicant's priority; 0 when unset). The user ranks the
+        # phone's hotspot (O+ Open, 20) above home (10), 2026-10-07.
         [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "glass-wifi priority SSID N"
         case "$3" in *[!0-9]*) die "glass-wifi priority SSID N (a whole number, 0 or more)" ;; esac
         [ -f "$c" ] || die "no networks stored (glass-wifi add)"
@@ -181,6 +183,23 @@ case "${1:-}" in
         [ -n "$last" ] && [ "$ssid" != "$last" ] && changed=1
         address "$ssid" "$changed"
         ;;
+    use)
+        # glass-wifi use SSID   join that stored network now, the others set
+        #                       aside until glass-wifi use auto or the next
+        #                       boot (wpa_supplicant's select_network: not
+        #                       saved to the file)
+        # glass-wifi use auto   choose by priority again
+        [ -n "${2:-}" ] || die "glass-wifi use SSID | auto"
+        if [ "$2" = auto ]; then
+            wpa_cli -i wlan0 reconfigure > /dev/null || die "wpa_supplicant refused"
+            echo "glass-wifi: choosing by priority again"
+            exit 0
+        fi
+        id=$(wpa_cli -i wlan0 list_networks | awk -F '\t' -v s="$2" 'NR > 1 && $2 == s { print $1; exit }')
+        [ -n "$id" ] || die "$2 is not stored (glass-wifi list)"
+        wpa_cli -i wlan0 select_network "$id" > /dev/null || die "wpa_supplicant refused"
+        echo "glass-wifi: joining $2 (glass-wifi use auto to go back)"
+        ;;
     static)
         # glass-wifi static                       the list
         # glass-wifi static SSID ADDR/LEN GW [DNS] a fixed address there
@@ -223,5 +242,5 @@ case "${1:-}" in
     list)
         [ -f "$c" ] && grep -E '^\s*ssid=' "$c" | sed 's/^\s*ssid=//'
         ;;
-    *) echo "glass-wifi add SSID [PASSPHRASE] | forget SSID | priority SSID N | static [SSID ADDR/LEN GATEWAY [DNS] | SSID off] | up | down | scan | status | list" >&2; exit 1 ;;
+    *) echo "glass-wifi add SSID [PASSPHRASE] | forget SSID | priority SSID N | static [SSID ADDR/LEN GATEWAY [DNS] | SSID off] | use SSID|auto | up | down | scan | status | list" >&2; exit 1 ;;
 esac
