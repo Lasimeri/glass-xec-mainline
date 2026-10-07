@@ -84,6 +84,15 @@ rm -rf "$slim/lib/firmware"
 gzip -9n < "$stock/initramfs.cpio" > "$stock/initramfs.cpio.gz"
 "$bi" pack "$out/boot-stock-kernel.img" "$stock/kernel" "$stock/initramfs.cpio.gz" "${hdr[@]}" --cmdline "$scmd" > /dev/null
 fit "$out/boot-stock-kernel.img" || echo "build-images: boot-stock-kernel.img is for fastboot boot only (RAM)"
+# The same, staying in the initramfs whatever userdata holds (/etc/glass-stay):
+# the rescue image, booted from RAM (glass rescue) to repair the rootfs.
+touch "$slim/etc/glass-stay"
+( cd "$k" && "$src/usr/gen_initramfs.sh" -o "$stock/initramfs-stay.cpio" -u "$(id -u)" -g "$(id -g)" \
+    "$slim" "$top/userland/initramfs.list" )
+rm -f "$slim/etc/glass-stay"
+gzip -9n < "$stock/initramfs-stay.cpio" > "$stock/initramfs-stay.cpio.gz"
+"$bi" pack "$out/boot-stock-kernel-stay.img" "$stock/kernel" "$stock/initramfs-stay.cpio.gz" "${hdr[@]}" --cmdline "$scmd" > /dev/null
+fit "$out/boot-stock-kernel-stay.img" || true
 
 # Google's XE24 Android with root adb: its own ramdisk with the three
 # properties flipped in default.prop; nothing else changes.

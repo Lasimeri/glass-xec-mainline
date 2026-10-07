@@ -5,9 +5,17 @@
 # Wi-Fi when a network is configured (glass-wifi add SSID PASSPHRASE).
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 log() { echo "glass-rootfs: $*" > /dev/kmsg; echo "$*" >> /run/glass/rcS.log; }
-mkdir -p /run/glass /run/dbus /var/lib/misc /tmp /dev/pts
 mountpoint -q /proc || mount -t proc proc /proc
 mountpoint -q /sys || mount -t sysfs sysfs /sys
+# /dev: the initramfs moves its own here; if that did not happen (a kernel
+# without devtmpfs and an older initramfs), fill one now, or dropbear dies
+# at the first connection for want of /dev/urandom.
+if [ ! -c /dev/urandom ]; then
+    mount -t devtmpfs devtmpfs /dev 2> /dev/null || mount -t tmpfs -o mode=755 tmpfs /dev
+    echo /sbin/mdev > /proc/sys/kernel/hotplug
+    mdev -s
+fi
+mkdir -p /run/glass /run/dbus /var/lib/misc /tmp /dev/pts /dev/shm
 mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
 mount -t tmpfs tmpfs /tmp
 mount -t debugfs debugfs /sys/kernel/debug 2> /dev/null

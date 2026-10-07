@@ -45,7 +45,7 @@ cd "$top"
 # USB link's fixed address.
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
-    GLASS_IP=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }')
+    GLASS_IP=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
 ALLOW=(boot recovery system cache userdata)
@@ -357,18 +357,56 @@ case "$verb" in
         isz=$(stat -c %s "$img")
         [ "$isz" -le "$size" ] || die "$img is $isz bytes, boot holds $size: refusing"
         confirm_typed "write $img ($isz bytes) into boot ($size bytes): Linux starts by itself from now on; stock Android's boot is in $(newest_backup_with boot)/boot.img (glass restore-partition DIR boot puts it back; fastboot stays reachable by the buttons)"
-        RESTORE_CTX=1
-        fb_flash boot "$img"
+        # From Linux on the Glass when it is up (the partition is the image's
+        # bytes; dd then read back), else fastboot.
+        if ssh_glass true < /dev/null > /dev/null 2>&1; then
+            bd=$(ssh_glass 'for u in /sys/class/block/*/uevent; do grep -qx PARTNAME=boot "$u" && { d=${u%/uevent}; echo "/dev/${d##*/}"; break; }; done' < /dev/null | tr -d '\r')
+            [ -n "$bd" ] || die "the Glass sees no boot partition"
+            say "writing $img into $bd on the Glass over ssh"
+            ssh_glass "dd of=$bd bs=1M conv=fsync 2>&1 | tail -n 1; sync" < "$img"
+            got=$(ssh_glass "dd if=$bd bs=1M count=$(( (isz + 1048575) / 1048576 )) 2> /dev/null | head -c $isz | sha256sum" < /dev/null | awk '{ print $1 }')
+            [ "$got" = "$(sha256sum "$img" | awk '{ print $1 }')" ] || die "read-back of $bd does not match $img"
+            say "written and read back; glass ssh reboot starts it"
+        else
+            RESTORE_CTX=1
+            fb_flash boot "$img"
+            say "written: fastboot reboot starts it"
+        fi
         rm -f out/known_hosts_glass   # a new system makes a new host key
-        say "written: fastboot reboot starts it"
         ;;
 
     flash-rootfs)
-        need fastboot
         [ -f out/rootfs.img ] || die "no out/rootfs.img (glass build)"
-        confirm_typed "write out/rootfs.img into userdata, overwriting it (oem unlock already wiped it; Android's data there is lost)"
-        fb_flash userdata out/rootfs.img
-        say "written: glass test-boot full switches to it"
+        # The bootloader refuses sparse images ("Sparsed Write") and wrote a
+        # 392 MB raw one for twelve minutes without finishing (2026-10-07),
+        # so the image goes in from Linux on the Glass when it is up: the
+        # raw image, compressed (mostly zeros), unpacked into the userdata
+        # partition at the eMMC's own speed. Fastboot, raw, is the fallback.
+        if ssh_glass true < /dev/null > /dev/null 2>&1; then
+            rootdev=$(ssh_glass "awk '\$2 == \"/\" { print \$1 }' /proc/mounts | tail -n 1" < /dev/null | tr -d '\r')
+            ud=$(ssh_glass 'for u in /sys/class/block/*/uevent; do grep -qx PARTNAME=userdata "$u" && { d=${u%/uevent}; echo "/dev/${d##*/}"; break; }; done' < /dev/null | tr -d '\r')
+            [ -n "$ud" ] || die "the Glass sees no userdata partition (safe image?)"
+            case "$rootdev" in
+                "$ud") die "the Glass is running from $ud already: a running rootfs is not overwritten (boot the initramfs alone: cmdline glass.stay, or fastboot)" ;;
+            esac
+            confirm_typed "write out/rootfs.img into $ud on the Glass over ssh ($GLASS_IP), overwriting it"
+            need simg2img
+            [ -f out/rootfs.raw ] && [ out/rootfs.raw -nt out/rootfs.img ] || simg2img out/rootfs.img out/rootfs.raw
+            say "writing $(stat -c %s out/rootfs.raw) bytes (compressed in flight) into $ud"
+            gzip -1 -c out/rootfs.raw | ssh_glass "gunzip -c | dd of=$ud bs=4M conv=fsync 2>&1 | tail -n 1; sync"
+            ssh_glass "mount -t ext4 -o ro,noload $ud /mnt 2> /dev/null && cat /mnt/etc/glass-rootfs; umount /mnt 2> /dev/null" < /dev/null | tr -d '\r' | grep -q "glass-xec rootfs" || die "the written partition does not read back as a glass rootfs"
+            say "written and read back; reboot the Glass (glass ssh reboot) to switch to it"
+        else
+            need fastboot
+            fastboot devices 2> /dev/null | grep -q . || die "neither ssh to the Glass ($GLASS_IP) nor fastboot: boot Linux or enter fastboot"
+            confirm_typed "write out/rootfs.img (raw, through fastboot: slow on this bootloader) into userdata, overwriting it"
+            need simg2img
+            [ -f out/rootfs.raw ] && [ out/rootfs.raw -nt out/rootfs.img ] || simg2img out/rootfs.img out/rootfs.raw
+            guard_part userdata
+            say "fastboot -S 0 flash userdata out/rootfs.raw"
+            fastboot -S 0 flash userdata out/rootfs.raw
+            say "written: glass test-boot full switches to it"
+        fi
         ;;
 
     restore)
