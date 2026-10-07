@@ -2,6 +2,8 @@
  * on a vertical sync, tear-free, and on a fixed schedule when asked.
  *
  *   ffmpeg ... -f rawvideo -pix_fmt bgra - | glass-fb [-r FPS] [-b N] [/dev/fb0]
+ *   ffmpeg ... -f rawvideo -pix_fmt yuv420p - | glass-fb -y [-r FPS] [-b N]
+ *       (-y: I420 in, packed to YUYV for the video overlay, which converts to RGB)
  *
  * The framebuffer (omapfb, 640x360, 32 bits) holds three pages: a frame is
  * written into a page not on screen, the display controller is pointed at
@@ -22,6 +24,7 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <linux/fb.h>
+#include <linux/omapfb.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +35,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define OMAPFB_WAITFORVSYNC _IOW('O', 24, int)
+#ifndef OMAPFB_WAITFORVSYNC
+#define OMAPFB_WAITFORVSYNC _IO('O', 57)   /* linux/omapfb.h: OMAP_IO(57) */
+#endif
 #ifndef FBIO_WAITFORVSYNC
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, unsigned int)
 #endif
@@ -44,6 +49,9 @@
 #define DISPC_BASE 0x48041000u
 #define DISPC_GFX_BA0 0x080
 #define DISPC_GFX_BA1 0x084
+#define DISPC_VID1_BA0 0x0bc
+#define DISPC_VID1_BA1 0x0c0
+static unsigned ba0 = DISPC_GFX_BA0, ba1 = DISPC_GFX_BA1;
 #define DISPC_CONTROL2 0x238
 #define DISPC_GO_LCD2 0x20
 static volatile uint32_t *dispc;
@@ -103,10 +111,28 @@ static void *reader(void *arg) {
     return NULL;
 }
 
+/* -y input is I420 (the decoder's own planes, no conversion in ffmpeg):
+ * packed here into YUYV, two pixels a 32-bit word, a line at a time;
+ * swscale's yuv420p to yuyv422 has no fast path on this build and cost
+ * twice the decode (measured 2026-10-07: ffmpeg 83% against 40%). */
+static int i420;
+static void pack_yuyv(unsigned char *dst, const unsigned char *src) {
+    unsigned w = var.xres, h = var.yres;
+    const unsigned char *Y = src, *U = src + w * h, *V = U + (w / 2) * (h / 2);
+    for (unsigned yy = 0; yy < h; yy++) {
+        const unsigned char *y = Y + (size_t) yy * w, *u = U + (size_t) (yy / 2) * (w / 2), *vv = V + (size_t) (yy / 2) * (w / 2);
+        uint32_t *o = (uint32_t *) (dst + (size_t) yy * line);
+        for (unsigned x = 0; x < w / 2; x++)
+            o[x] = (uint32_t) y[2 * x] | ((uint32_t) u[x] << 8) | ((uint32_t) y[2 * x + 1] << 16) | ((uint32_t) vv[x] << 24);
+    }
+}
+
 static void show(const unsigned char *buf) {
     int next = (shown + 1) % pages;
     unsigned char *dst = mem + page * next;
-    if (line == row) {
+    if (i420) {
+        pack_yuyv(dst, buf);
+    } else if (line == row) {
         memcpy(dst, buf, frame);
     } else {
         for (unsigned y = 0; y < var.yres; y++) memcpy(dst + (size_t) y * line, buf + y * row, row);
@@ -122,8 +148,8 @@ static void show(const unsigned char *buf) {
          * controller takes the new address at its next vertical sync and
          * clears GO. */
         uint32_t addr = (uint32_t) (smem + page * next);
-        dispc[DISPC_GFX_BA0 / 4] = addr;
-        dispc[DISPC_GFX_BA1 / 4] = addr;
+        dispc[ba0 / 4] = addr;
+        dispc[ba1 / 4] = addr;
         dispc[DISPC_CONTROL2 / 4] |= DISPC_GO_LCD2;
         for (int i = 0; i < 40 && (dispc[DISPC_CONTROL2 / 4] & DISPC_GO_LCD2); i++) {
             struct timespec ts = { 0, 250000 };
@@ -144,16 +170,48 @@ static void show(const unsigned char *buf) {
     shown = next;
 }
 
+/* -y: the frames are YUYV (4:2:2, 2 bytes a pixel) on the first video
+ * overlay (/dev/fb1, DISPC VID1), full screen above the console: the
+ * display controller converts to RGB, the CPU only copies half the bytes.
+ * fb1 has no memory at boot: three pages are given to it, its format set,
+ * and the plane enabled at 0,0 at the panel's size. */
+static int setup_overlay(void) {
+    struct fb_var_screeninfo v0;
+    int f0 = open("/dev/fb0", O_RDONLY);
+    if (f0 < 0 || ioctl(f0, FBIOGET_VSCREENINFO, &v0)) { perror("glass-fb: /dev/fb0"); return 1; }
+    close(f0);
+    unsigned w = v0.xres, h = v0.yres;
+    FILE *s = fopen("/sys/class/graphics/fb1/size", "w");
+    if (!s) { perror("glass-fb: fb1 size"); return 1; }
+    fprintf(s, "%u\n", w * h * 2 * 3); fclose(s);
+    int f1 = open("/dev/fb1", O_RDWR);
+    if (f1 < 0) { perror("glass-fb: /dev/fb1"); return 1; }
+    struct omapfb_plane_info pi;
+    if (ioctl(f1, OMAPFB_QUERY_PLANE, &pi)) { perror("glass-fb: query plane"); return 1; }
+    pi.enabled = 0; ioctl(f1, OMAPFB_SETUP_PLANE, &pi);
+    struct fb_var_screeninfo v;
+    ioctl(f1, FBIOGET_VSCREENINFO, &v);
+    v.xres = w; v.yres = h; v.xres_virtual = w; v.yres_virtual = h * 3; v.xoffset = 0; v.yoffset = 0;
+    v.bits_per_pixel = 16; v.nonstd = OMAPFB_COLOR_YUY422; v.activate = FB_ACTIVATE_NOW;
+    if (ioctl(f1, FBIOPUT_VSCREENINFO, &v)) { perror("glass-fb: fb1 format"); return 1; }
+    pi.pos_x = 0; pi.pos_y = 0; pi.out_width = w; pi.out_height = h; pi.enabled = 1;
+    if (ioctl(f1, OMAPFB_SETUP_PLANE, &pi)) { perror("glass-fb: enable plane"); return 1; }
+    close(f1);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *dev = "/dev/fb0";
-    int fps = 0, cushion = 1;
+    int fps = 0, cushion = 1, yuv = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-r") && i + 1 < argc) fps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) cushion = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-y")) { yuv = 1; dev = "/dev/fb1"; }
         else dev = argv[i];
     }
     if (cushion < 1) cushion = 1;
     if (cushion > RING - 2) cushion = RING - 2;
+    if (yuv && setup_overlay()) return 1;
     fb = open(dev, O_RDWR);
     if (fb < 0) { perror(dev); return 1; }
     struct fb_fix_screeninfo fix;
@@ -165,6 +223,7 @@ int main(int argc, char **argv) {
     if (pages > 3) pages = 3;
     row = (size_t) var.xres * (var.bits_per_pixel / 8);
     frame = row * var.yres;
+    if (yuv) { i420 = 1; frame = (size_t) var.xres * var.yres * 3 / 2; }
     mem = mmap(NULL, page * pages, PROT_WRITE, MAP_SHARED, fb, 0);
     if (mem == MAP_FAILED) { perror("mmap"); return 1; }
     if (var.yres_virtual < var.yres * pages) {
@@ -180,7 +239,8 @@ int main(int argc, char **argv) {
         void *p = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, DISPC_BASE);
         if (p != MAP_FAILED) {
             volatile uint32_t *d = p;
-            uint32_t ba = d[DISPC_GFX_BA0 / 4];
+            if (yuv) { ba0 = DISPC_VID1_BA0; ba1 = DISPC_VID1_BA1; }
+            uint32_t ba = d[ba0 / 4];
             if (ba >= smem && ba < smem + page * pages) dispc = d;
             else fprintf(stderr, "glass-fb: the graphics layer scans 0x%08x, not this framebuffer (0x%08lx): pan only\n", ba, smem);
         }
@@ -235,9 +295,12 @@ int main(int argc, char **argv) {
         }
     }
     fprintf(stderr, "glass-fb: %lu frames, %lu late slots\n", frames, late);
-    if (dispc && shown != 0) {   /* leave the console's page on screen */
-        dispc[DISPC_GFX_BA0 / 4] = (uint32_t) smem;
-        dispc[DISPC_GFX_BA1 / 4] = (uint32_t) smem;
+    if (yuv) {   /* the overlay off: the console underneath shows again */
+        struct omapfb_plane_info pi;
+        if (ioctl(fb, OMAPFB_QUERY_PLANE, &pi) == 0) { pi.enabled = 0; ioctl(fb, OMAPFB_SETUP_PLANE, &pi); }
+    } else if (dispc && shown != 0) {   /* leave the console's page on screen */
+        dispc[ba0 / 4] = (uint32_t) smem;
+        dispc[ba1 / 4] = (uint32_t) smem;
         dispc[DISPC_CONTROL2 / 4] |= DISPC_GO_LCD2;
     }
     munmap(mem, page * pages);

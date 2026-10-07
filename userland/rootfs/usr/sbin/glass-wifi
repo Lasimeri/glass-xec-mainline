@@ -21,6 +21,9 @@ radio() {
         echo $f/fw_bcmdhd.bin > /sys/module/bcmdhd/parameters/firmware_path
         echo $f/bcmdhd.cal > /sys/module/bcmdhd/parameters/nvram_path
     fi
+    # The MAC is the radio's own (bcmdhd refuses a new one: the interface
+    # will not come up again after a change, seen 2026-10-07); the desktop
+    # finds the Glass by it when the address changes (scripts/glass).
     ip link set wlan0 up || die "wlan0 did not come up (dmesg | grep -i -e dhd -e brcmf)"
 }
 conf() {

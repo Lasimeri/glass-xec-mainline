@@ -6,6 +6,9 @@
 #   glass-audio volume PERCENT     the Glass's own output level, kept with the
 #                                  route (the desktop's sink volume is a
 #                                  separate control on top of it)
+#   glass-audio jack               "connected h2w|usb_audio" (exit 0) when an
+#                                  earbud or headset is plugged in, else
+#                                  "none" (exit 1)
 #   glass-audio off
 #   glass-audio test               a tone on each output in turn, low to high
 #                                  pitch: earphone 440 Hz, handsfree 660 Hz,
@@ -61,6 +64,13 @@ tone() {   # HZ SECONDS
 }
 case "${1:-}" in
     route) route "${2:-}" "${3:-50}" && { mkdir -p /etc/glass; echo "$2 ${3:-50}" > "$conf"; } ;;
+    jack)
+        # An audio device on the Glass: the earbud on the micro-USB port
+        # (switch usb_audio) or a wired headset (switch h2w).
+        for s in h2w usb_audio; do
+            [ "$(cat /sys/class/switch/$s/state 2> /dev/null)" != 0 ] && [ -e /sys/class/switch/$s/state ] && { echo "connected $s"; exit 0; }
+        done
+        echo none; exit 1 ;;
     volume)
         [ -f "$conf" ] || { echo "glass-audio: no route yet (glass-audio route ...)" >&2; exit 1; }
         set -- $(cat "$conf") "${2:-50}"
@@ -72,7 +82,21 @@ case "${1:-}" in
         route headset 50; tone 880 1.5
         quiet ;;
     play)
-        [ -f "$conf" ] && route $(cat "$conf")
-        exec aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="${BUFFER_US:-100000}" ;;
+        # An earbud or headset plugged in takes the headset outputs.
+        if "$0" jack > /dev/null; then
+            set -- $(cat "$conf" 2> /dev/null) 50 50
+            route headset "${2:-50}"
+        elif [ -f "$conf" ]; then
+            route $(cat "$conf")
+        fi
+        aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="${BUFFER_US:-100000}" &
+        a=$!
+        # Unplugging the earbud ends the session (the desktop's sound goes
+        # back to its own output).
+        while kill -0 $a 2> /dev/null; do
+            sleep 2
+            "$0" jack > /dev/null || { kill $a; break; }
+        done
+        wait $a 2> /dev/null ;;
     *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

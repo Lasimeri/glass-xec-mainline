@@ -53,6 +53,22 @@ if [ -z "$GLASS_IP" ]; then
         last=$(head -n 1 out/glass-ip)
         ping -c 1 -W 1 "$last" > /dev/null 2>&1 && GLASS_IP=$last
     fi
+    # The last address went quiet: the USB link if it is there, else the
+    # Glass by its Wi-Fi MAC (out/glass-mac) in the neighbour table after one
+    # round of pings over the desktop's own subnet (about a second).
+    if [ -z "$GLASS_IP" ] && ! ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && [ -s out/glass-mac ]; then
+        mac=$(head -n 1 out/glass-mac)
+        net=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | cut -d. -f1-3)
+        if [ -n "$net" ]; then
+            for i in $(seq 1 254); do ping -c 1 -W 1 "$net.$i" > /dev/null 2>&1 & done
+            wait
+            found=$(ip neigh show | awk -v m="$mac" 'tolower($0) ~ m && $1 ~ /^[0-9.]+$/ { print $1; exit }')
+            if [ -n "$found" ]; then
+                GLASS_IP=$found
+                echo "$found" > out/glass-ip
+            fi
+        fi
+    fi
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
 ALLOW=(boot recovery system cache userdata)
@@ -455,9 +471,11 @@ case "$verb" in
     ip)
         a=$(ssh_glass "ip -4 addr show wlan0 2> /dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p'" < /dev/null | tr -d '\r' | head -n 1)
         [ -n "$a" ] || die "the Glass has no Wi-Fi address (glass ssh glass-wifi status)"
+        m=$(ssh_glass "cat /sys/class/net/wlan0/address" < /dev/null | tr -d '\r' | head -n 1)
         mkdir -p out
         echo "$a" > out/glass-ip
-        echo "$a"
+        [ -n "$m" ] && echo "$m" > out/glass-mac
+        echo "$a $m"
         ;;
 
     collect)

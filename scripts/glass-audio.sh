@@ -5,7 +5,8 @@
 #   glass-audio.sh stop       end it; the stereo is the default again
 #
 # A PipeWire sink "Google Glass" (a null sink) is made the default output
-# while the Glass answers; everything playing moves to it. Its monitor is
+# while the Glass answers and has an audio device plugged in (its earbud on
+# the micro-USB port, or a headset); everything playing moves to it. Its monitor is
 # read as 48 kHz mono 16-bit (96 KB/s; the bone conduction transducer is
 # one channel) and sent down an ssh session to the Glass, where glass-audio
 # play hands it to ALSA through the route chosen with glass-audio route.
@@ -47,18 +48,30 @@ restore() {
     echo "glass-audio: $(date +%T) back to $prev" >> "$log"
     prev=""
 }
-trap 'restore; exit 0' INT TERM
+trap 'kill $(jobs -p) 2> /dev/null; restore; exit 0' INT TERM
 
 echo "glass-audio: $(date +%T) started, buffer $audio_ms ms" >> "$log"
+# Left as the default by an earlier run that was killed mid-session: give
+# the default back to a real output (the stereo, the first hardware sink).
+if [ "$(pactl get-default-sink)" = "$sink" ]; then
+    prev=$(pactl list short sinks | awk '$2 ~ /^alsa_output\./ && $2 ~ /Schiit/ { print $2; exit }')
+    [ -n "$prev" ] || prev=$(pactl list short sinks | awk '$2 ~ /^alsa_output\./ { print $2; exit }')
+    restore
+fi
 while :; do
-    if "$top/scripts/glass" ssh true < /dev/null > /dev/null 2>&1; then
+    # Only while an earbud or headset is plugged into the Glass (glass-audio
+    # jack); the Glass ends the session when it is unplugged.
+    if "$top/scripts/glass" ssh 'glass-audio jack' < /dev/null > /dev/null 2>&1; then
         cur=$(pactl get-default-sink)
         [ "$cur" = "$sink" ] || prev=$cur
         pactl set-default-sink "$sink"
         for s in $(pactl list short sink-inputs | awk '{print $1}'); do pactl move-sink-input "$s" "$sink" 2> /dev/null; done
         echo "glass-audio: $(date +%T) to the Glass (was $prev)" >> "$log"
+        # In the background with a wait: a stop signal then runs the trap at
+        # once (bash defers traps until a foreground pipeline ends).
         parec -d "$sink.monitor" --format=s16le --rate=48000 --channels=1 --latency-msec=10 --raw 2>> "$log" |
-            "$top/scripts/glass" ssh "BUFFER_US=$((audio_ms * 1000)) glass-audio play" 2>> "$log"
+            "$top/scripts/glass" ssh "BUFFER_US=$((audio_ms * 1000)) glass-audio play" 2>> "$log" &
+        wait $!
         restore
     fi
     sleep 5

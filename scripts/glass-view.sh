@@ -92,18 +92,24 @@ glass_ffmpeg() {
 glass_ffmpeg || exit 1
 # The display writer on the Glass: glass-fb (tools/glass-fb, page flips on
 # the vertical sync, tear-free) when the rootfs has it, else ffmpeg's own
-# fbdev output (writes the visible page directly).
-decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra"
+# fbdev output (writes the visible page directly). With glass-fb, the frames
+# go out as YUYV to the display controller's video overlay, which converts
+# them to RGB itself (YUV=0 for the older BGRA path on the graphics layer):
+# the Glass's CPU no longer converts every pixel, and copies half the bytes.
+decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough"
 has_fb=0
 for try in 1 2 3; do
     if "$top/scripts/glass" ssh 'test -x /usr/local/bin/glass-fb' < /dev/null > /dev/null 2>&1; then has_fb=1; break; fi
     sleep 1
 done
-if [ "$has_fb" = 1 ]; then
-    sink="$decode -f rawvideo - | /usr/local/bin/glass-fb -r $fps -b 1"
+if [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ]; then
+    sink="$decode -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b 1"
+    echo "glass-view: the Glass shows YUYV frames on its video overlay (converted by the display controller), on its vertical sync, $fps/s with one frame of cushion (glass-fb)" >&2
+elif [ "$has_fb" = 1 ]; then
+    sink="$decode -pix_fmt bgra -f rawvideo - | /usr/local/bin/glass-fb -r $fps -b 1"
     echo "glass-view: the Glass shows frames on its vertical sync, on a $fps/s schedule with one frame of cushion (glass-fb)" >&2
 else
-    sink="$decode -f fbdev /dev/fb0"
+    sink="$decode -pix_fmt bgra -f fbdev /dev/fb0"
     echo "glass-view: no glass-fb on the Glass: ffmpeg writes the visible page directly (no sync, no pacing)" >&2
 fi
 
