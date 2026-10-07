@@ -9,9 +9,18 @@
  * lines in global coordinates (desk cursor). The viewport keeps the pointer
  * inside a central zone (a quarter of the viewport on each side): it moves
  * only when the pointer nears an edge, like a camera panning, and never
- * leaves the monitor. The frame is not scaled: a CUDA compositor with a WxH
- * canvas shows the monitor placed at (-vx,-vy), one source pixel per
- * output pixel; then NV12 and NVENC, MPEG-TS on stdout.
+ * leaves the monitor.
+ *
+ * The chain, after what the compositor and GStreamer do with time: the
+ * capture is asked for FPS frames a second (KWin paces to a negotiated
+ * rate better than it serves a higher one) and re-sends its last frame
+ * while the screen is still; a queue takes the frames off PipeWire's
+ * thread at once; the CUDA compositor is the one rate stage, at latency
+ * zero, a WxH canvas with the whole monitor placed at (-vx,-vy) and kept
+ * at its own size, one source pixel per output pixel; NV12; NVENC with no
+ * frame held back and a buffer of one frame; Matroska when its muxer is
+ * installed (each frame carries its size, so the receiver releases it at
+ * once), else MPEG-TS (a frame released when the next begins); stdout.
  */
 #include <gst/gst.h>
 #include <pthread.h>
@@ -47,10 +56,10 @@ static void place(int cx, int cy) {
 static void *follow(void *arg) {
     FILE *f = fopen((const char *) arg, "r");
     if (!f) { perror("glass-viewport: cursor file"); return NULL; }
-    char line[64];
-    while (fgets(line, sizeof line, f)) {
+    char linebuf[64];
+    while (fgets(linebuf, sizeof linebuf, f)) {
         int cx, cy;
-        if (sscanf(line, "%d %d", &cx, &cy) == 2) place(cx, cy);
+        if (sscanf(linebuf, "%d %d", &cx, &cy) == 2) place(cx, cy);
     }
     fclose(f);
     return NULL;
@@ -70,16 +79,20 @@ int main(int argc, char **argv) {
     if (W > outw || H > outh) { fprintf(stderr, "glass-viewport: %dx%d does not fit %dx%d\n", W, H, outw, outh); return 2; }
     vx = (outw - W) / 2; vy = (outh - H) / 2;
 
+    GstElementFactory *mk = gst_element_factory_find("matroskamux");
+    const char *mux = mk ? "matroskamux streamable=true" : "mpegtsmux";
+    if (mk) gst_object_unref(mk);
+
     char desc[2048];
     snprintf(desc, sizeof desc,
         "pipewiresrc fd=%s path=%s do-timestamp=true keepalive-time=%d ! video/x-raw "
-        "! videorate ! video/x-raw,framerate=%d/1 "
-        "! cudaupload ! cudacompositor name=vp sink_0::xpos=%d sink_0::ypos=%d "
-        "! video/x-raw(memory:CUDAMemory),width=%d,height=%d "
+        "! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream "
+        "! cudaupload ! cudacompositor name=vp latency=0 sink_0::xpos=%d sink_0::ypos=%d sink_0::width=%d sink_0::height=%d "
+        "! video/x-raw(memory:CUDAMemory),width=%d,height=%d,framerate=%d/1 "
         "! cudaconvertscale ! video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12 "
-        "! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d gop-size=%d zerolatency=true bframes=0 "
-        "! h264parse ! mpegtsmux ! fdsink fd=1 sync=false",
-        fd, node, 1000 / fps, fps, -vx, -vy, W, H, W, H, kbit, fps);
+        "! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d vbv-buffer-size=%d gop-size=%d zerolatency=true bframes=0 rc-lookahead=0 "
+        "! h264parse ! %s ! fdsink fd=1 sync=false",
+        fd, node, 1000 / fps, -vx, -vy, outw, outh, W, H, fps, W, H, kbit, kbit / fps, fps, mux);
     GError *err = NULL;
     pipeline = gst_parse_launch(desc, &err);
     if (!pipeline || err) { fprintf(stderr, "glass-viewport: %s\n", err ? err->message : "no pipeline"); return 1; }
@@ -91,7 +104,7 @@ int main(int argc, char **argv) {
     pthread_detach(t);
 
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    fprintf(stderr, "glass-viewport: %dx%d of %dx%d, following the pointer, %d frames/s, %d kbit/s\n", W, H, outw, outh, fps, kbit);
+    fprintf(stderr, "glass-viewport: %dx%d of %dx%d, following the pointer, %d frames/s, %d kbit/s, %s\n", W, H, outw, outh, fps, kbit, mk ? "matroska" : "mpeg-ts");
     GstBus *bus = gst_element_get_bus(pipeline);
     GstMessage *msg = gst_bus_timed_pop_filtered(bus, GST_CLOCK_TIME_NONE, GST_MESSAGE_ERROR | GST_MESSAGE_EOS);
     int rc = 0;

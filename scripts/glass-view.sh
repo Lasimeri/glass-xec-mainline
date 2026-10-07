@@ -46,12 +46,15 @@ fi
 # Glass then draws at even intervals. The hold is one compositor interval
 # (7 ms at 144 Hz; up to 1/FPS while the screen is still). PACE=0 lets
 # frames through as they come, at most FPS of them, never held.
+# The container: Matroska carries each frame's size, so the Glass releases a
+# frame the moment it lands; MPEG-TS makes it wait for the next frame's start.
+if gst-inspect-1.0 matroskamux > /dev/null 2>&1; then mux="matroskamux streamable=true"; else mux=mpegtsmux; fi
 pace_src=${PACE:-1}
 if [ "$pace_src" = 0 ]; then
     rate=(! videorate drop-only=true max-rate="$fps")
     keep=()
 else
-    rate=(! videorate ! "video/x-raw,framerate=$fps/1")
+    rate=(! videorate ! "video/x-raw")
     keep=(keepalive-time=$((1000 / fps)))
 fi
 desk=${DESK:-$HOME/deskpilot/target/release/desk}
@@ -89,12 +92,18 @@ glass_ffmpeg || exit 1
 # The display writer on the Glass: glass-fb (tools/glass-fb, page flips on
 # the vertical sync, tear-free) when the rootfs has it, else ffmpeg's own
 # fbdev output (writes the visible page directly).
-decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra"
-if "$top/scripts/glass" ssh 'test -x /usr/local/bin/glass-fb' < /dev/null > /dev/null 2>&1; then
-    sink="$decode -f rawvideo - | /usr/local/bin/glass-fb"
-    echo "glass-view: the Glass flips pages on its vertical sync (glass-fb)" >&2
+decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra"
+has_fb=0
+for try in 1 2 3; do
+    if "$top/scripts/glass" ssh 'test -x /usr/local/bin/glass-fb' < /dev/null > /dev/null 2>&1; then has_fb=1; break; fi
+    sleep 1
+done
+if [ "$has_fb" = 1 ]; then
+    sink="$decode -f rawvideo - | /usr/local/bin/glass-fb -r $fps -b 1"
+    echo "glass-view: the Glass shows frames on its vertical sync, on a $fps/s schedule with one frame of cushion (glass-fb)" >&2
 else
     sink="$decode -f fbdev /dev/fb0"
+    echo "glass-view: no glass-fb on the Glass: ffmpeg writes the visible page directly (no sync, no pacing)" >&2
 fi
 
 # OUTPUT "follow": pixel perfect. A 640x360 window of the primary monitor,
@@ -147,8 +156,9 @@ else
 fi
 "$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
     pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw" \
+    ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
     "${rate[@]}" \
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
-    ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" gop-size="$fps" zerolatency=true bframes=0 \
-    ! h264parse ! mpegtsmux ! fdsink fd=1 sync=false \
+    ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size="$fps" zerolatency=true bframes=0 rc-lookahead=0 \
+    ! h264parse ! $mux ! fdsink fd=1 sync=false \
     | "$top/scripts/glass" ssh "$sink"
