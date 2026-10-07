@@ -6,7 +6,8 @@
 # other programs there).
 ::respawn:/etc/glass/console display
 ::respawn:/usr/sbin/dropbear -F -E -R -s -p 22
-::respawn:/usr/lib/bluetooth/bluetoothd -n
+# Bluetooth (bluetoothd and D-Bus) only when glass-pan asks: two cores, and
+# the stream's decoder wants one of them.
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/bin/sync
 ::shutdown:/bin/umount -a -r

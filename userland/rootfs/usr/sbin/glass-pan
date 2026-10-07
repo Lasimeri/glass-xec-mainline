@@ -4,9 +4,17 @@
 #   glass-pan pair AA:BB:CC:DD:EE:FF    (interactive: confirm on both sides)
 #   glass-pan up AA:BB:CC:DD:EE:FF      bnep0 by DHCP from the desktop
 #   glass-pan down | status
+# D-Bus and bluetoothd run only while Bluetooth is wanted (started here, not
+# at boot: two cores, one of them the stream decoder's).
+daemons() {
+    mkdir -p /run/dbus
+    [ -S /run/dbus/system_bus_socket ] || dbus-daemon --system
+    pidof bluetoothd > /dev/null || { /usr/lib/bluetooth/bluetoothd -n > /run/glass/bluetoothd.log 2>&1 & sleep 2; }
+}
 case "${1:-}" in
     pair)
         mac=${2:?MAC}
+        daemons
         bluetoothctl power on
         bluetoothctl agent on
         bluetoothctl default-agent
@@ -16,6 +24,7 @@ case "${1:-}" in
         ;;
     up)
         mac=${2:?MAC}
+        daemons
         bluetoothctl power on
         bt-network -c "$mac" nap > /run/glass/pan.log 2>&1 &
         echo $! > /run/glass/pan.pid

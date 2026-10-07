@@ -13,11 +13,10 @@
 #                        and glass info (XE24's own rooted image is gone).
 #   rootfs.img           the Alpine rootfs (ext4, sparse for fastboot) for
 #                        userdata.
-# Every boot image must fit in 5,861,376 bytes: the boot partition has held
-# the AOSP 5.1.1 ROM's boot.img of that size on real units (dl/aosp), and
-# the recovery partition Google's XE24 recovery.img of 6,344,704; the smaller
-# of the two proven sizes is the bound, until a backup's partitions.txt
-# gives the real ones.
+# Every boot image must fit the boot and recovery partitions: 8 MiB each
+# on the user's unit (its partition table, read 2026-10-07: mmcblk0p7 and
+# p6, 16384 sectors; backup/*/partitions.txt). Before that the bound was the
+# largest image seen in a boot partition (the AOSP ROM's 5,861,376 bytes).
 set -euo pipefail
 top=$(cd "$(dirname "$0")/.." && pwd)
 KV=${KV:-7.2.9}
@@ -26,7 +25,7 @@ src=$top/src/linux-$KV
 out=$top/out
 bi=$top/tools/bootimg/bootimg
 mkdir -p "$out"
-LIMIT=5861376
+LIMIT=8388608
 [ -x "$bi" ] || tcc -O2 -o "$bi" "$top/tools/bootimg/bootimg.c"
 
 # The stock layout (deviceinfo and Google's images agree).

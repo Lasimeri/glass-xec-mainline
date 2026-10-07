@@ -27,8 +27,8 @@ fi
 
 /etc/glass/rcS
 
-dbus-daemon --system && log "dbus up"
+# D-Bus and bluetoothd start with glass-pan, not here.
 if grep -q '^network=' /etc/wpa_supplicant/wpa_supplicant.conf 2> /dev/null; then
-    /usr/sbin/glass-wifi up &
+    /usr/sbin/glass-wifi up > /dev/null 2>&1 &
 fi
 exit 0

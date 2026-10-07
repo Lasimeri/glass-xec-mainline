@@ -65,14 +65,18 @@ if [ -z "$out" ]; then
     [ -n "$out" ] || out=DP-1
 fi
 
-# The Glass side: its ffmpeg, pushed into RAM once per boot.
+# The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
+# pushed into RAM once per boot on an initramfs-only Glass.
+gff=/usr/local/bin/ffmpeg
 glass_ffmpeg() {
-    "$top/scripts/glass" ssh 'test -x /tmp/ffmpeg' 2> /dev/null && return 0
+    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
+    gff=/tmp/ffmpeg
+    "$top/scripts/glass" ssh "test -x $gff" 2> /dev/null && return 0
     local f
     f=$(ls -d "$top"/dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg 2> /dev/null | head -n 1)
     [ -n "$f" ] || { echo "glass-view: no dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg (glass fetch)" >&2; return 1; }
     echo "glass-view: pushing ffmpeg ($(stat -c %s "$f") bytes) into the Glass's RAM" >&2
-    "$top/scripts/glass" ssh 'cat > /tmp/ffmpeg && chmod +x /tmp/ffmpeg' < "$f"
+    "$top/scripts/glass" ssh "cat > $gff && chmod +x $gff" < "$f"
 }
 glass_ffmpeg || exit 1
 
@@ -93,4 +97,4 @@ echo "glass-view: the first run asks in the portal's dialog which monitor to sha
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
     ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" gop-size="$fps" zerolatency=true bframes=0 \
     ! h264parse ! mpegtsmux ! fdsink fd=1 sync=false \
-    | "$top/scripts/glass" ssh "/tmp/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"
+    | "$top/scripts/glass" ssh "$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"

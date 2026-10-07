@@ -123,19 +123,33 @@ glass-term                       # the desktop's tmux session "claude"
 - **Send back:** `glass collect`, `/run/glass/rcS.log`, `/run/glass/pan.log` if PAN fails.
 
 ## 9. Making it permanent
+Two shapes. **Linux as the default boot, no cable ever** (what the user chose on 2026-10-07):
+```sh
+scripts/glass flash-boot stock          # the stock-kernel image into boot (typed yes)
+```
+Stock Android's boot stays in your backup (`glass restore-partition backup/DATE boot` puts it back; fastboot stays reachable by the buttons; recovery is untouched). Or **stock Android stays the default and Linux sits in recovery**:
 ```sh
 scripts/glass flash-recovery full
 ```
-- **Safety:** this refuses without a backup and without a known recovery size, and it never touches boot. Stock Android stays the normal boot; Linux is in recovery. An oversized image is refused by the bootloader itself ("too large for partition", reported for an 8.4 MB recovery on XE24, so recovery is under 8.4 MB; the full image is under 5.6 MB).
+- **Safety:** both refuse without a backup holding that partition and its size, and both check the image against it (8 MiB each on the user's unit). An oversized image is refused by the bootloader itself too ("too large for partition", reported for an 8.4 MB recovery on XE24).
 - **`flash:raw`:** recent platform-tools (the desktop has 37.0.0) ask the bootloader for the partition size before writing a boot image and fail on Glass's empty answer ("Couldn't parse partition size '0x'"). The CLI then repeats the write as `fastboot flash:raw`, which owners confirm works on XE24.
 - **Booting Linux:** `adb reboot recovery` from Android, `fastboot reboot recovery` (bootloader support **unverified**), or the recovery button combination of step 2.
 
+## 9a. Wireless: Wi-Fi, the name "glass", ssh over the air
+```sh
+scripts/glass-wifi-copy --from lasimeri@192.168.0.78 HomeMixed   # a laptop's saved network onto the Glass
+scripts/glass ssh glass-wifi status                               # ssid, state, address
+GLASS_IP=192.168.0.4 scripts/glass ssh                            # over Wi-Fi; or just scripts/glass ssh
+```
+The Glass joins its stored networks at boot (`rcS-rootfs`), announces the hostname `glass` with its DHCP lease, and `scripts/glass` reaches it by that name when the router resolves it, else by `GLASS_IP`, else over USB. The passphrase is never shown or typed: `glass-wifi-copy` reads it on the laptop with sudo and feeds it down the Glass's ssh session, where `glass-wifi add` keeps the derived key only (`/etc/wpa_supplicant`, root only). On the stock kernel the radio is Google's `bcmdhd`, fed its firmware from `/lib/firmware/glass`. Works since 2026-10-07 (HomeMixed, 192.168.0.4, signal -63 dBm, 39 Mbit/s, 4.5 ms round trip). Bluetooth's daemons start only with `glass-pan`: the Glass has two cores and the stream's decoder wants one.
+
 ## 9b. The desktop's monitor on the glasses
 ```sh
-scripts/glass-view.sh              # the primary monitor, 30 frames/s asked; Ctrl-C stops
-scripts/glass-view.sh DP-2 30      # another output
+scripts/glass-view.sh                      # the primary monitor, 24 frames/s paced; Ctrl-C stops
+BUFFER_MS=42 scripts/glass-view.sh         # over Wi-Fi: a one-frame jitter buffer on the Glass
+PACE=0 scripts/glass-view.sh DP-2 24       # another output, frames as they come
 ```
-Works on the stock-kernel image (step 6) today. The desktop captures, scales on the GPU and encodes H.264 with NVENC; the stream rides the ssh session; the Glass decodes it with a static ffmpeg pushed into its RAM and writes `/dev/fb0`. Kernel capture (30 frames/s) needs a private ffmpeg copy with `cap_sys_admin` (the script's header says how); without it the compositor's screenshots give about 10 frames/s.
+Works on the stock-kernel image (step 6). Capture is the compositor's own screencast through the desktop portal (`desk cast`, ~/deskpilot; one share dialog the first time), scaled and encoded H.264 on the GPU (NVENC); the stream rides the ssh session; the Glass decodes it with ffmpeg (on the rootfs, or pushed into RAM) on one thread into `/dev/fb0`. Nothing holds a frame; the Glass decodes 65 frames/s at this size. Kernel capture (`kmsgrab`) does not work on NVIDIA's driver (tiled 16-bit float scanout).
 
 ## 10. The desktop side of `glass-term`
 - **tmux:** Claude Code has to run inside tmux for the Glass to attach to the same session: `tmux new -A -s claude`, then `claude ...` inside it. Today `~/tts079/claude-voice.sh` starts it directly in Konsole; that has to change.

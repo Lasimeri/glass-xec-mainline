@@ -21,6 +21,10 @@
 #                               the image into recovery (stock boot stays), only
 #                               with a backup and a known partition size
 #   glass flash-rootfs          out/rootfs.img into userdata
+#   glass flash-boot stock|full the image into boot: Linux starts by itself at
+#                               power-on, no cable (stock Android's boot stays in
+#                               your backup; recovery is untouched); only with a
+#                               backup holding boot.img and its size
 #   glass restore               Google's XE24 boot, recovery and system back,
 #                               cache and userdata wiped
 #   glass restore-partition DIR NAME
@@ -30,15 +34,20 @@
 #   glass serial                the USB serial console (/dev/ttyACM*)
 # Every write says what it will do and asks for a typed "yes" (or --yes).
 # Only boot, recovery, system, cache and userdata are ever written; xloader,
-# bootloader and fpga are refused outright; boot is written only by restore
-# and restore-partition.
+# bootloader and fpga are refused outright; boot is written only by
+# flash-boot, restore and restore-partition.
 set -euo pipefail
 top=$(cd "$(dirname "$0")/.." && pwd)
 cd "$top"
 
-# The Glass's address: the USB link's fixed one, or GLASS_IP for its Wi-Fi
-# address (glass-wifi status on the Glass prints it).
-GLASS_IP=${GLASS_IP:-172.16.42.1}
+# The Glass's address: GLASS_IP; else the name "glass" when the router
+# resolves it (the Glass announces that name with its DHCP lease); else the
+# USB link's fixed address.
+GLASS_IP=${GLASS_IP:-}
+if [ -z "$GLASS_IP" ]; then
+    GLASS_IP=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }')
+    [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
+fi
 ALLOW=(boot recovery system cache userdata)
 FORBID=(xloader bootloader fpga efs bootconfig misc)
 YES=0
@@ -92,7 +101,7 @@ fb_flash() {   # PARTITION IMAGE
     local p=$1 img=$2
     guard_part "$p"
     [ "$p" = boot ] && [ "$RESTORE_CTX" != 1 ] &&
-        die "refusing to write boot: only glass restore and restore-partition write it"
+        die "refusing to write boot: only glass flash-boot, restore and restore-partition write it"
     [ -f "$img" ] || die "no $img"
     say "fastboot flash $p $img"
     local out rc=0
@@ -157,19 +166,20 @@ newest_backup_with() {
     return 1
 }
 
-# The recovery partition's size in bytes: the newest backup's
-# partitions.txt, else fastboot getvar.
-recovery_size() {
+# A partition's size in bytes: the newest backup's partitions.txt, else
+# fastboot getvar.
+part_size() {   # NAME
     local d s
-    if d=$(newest_backup_with recovery) && [ -f "$d/partitions.txt" ]; then
-        s=$(awk '$1 == "recovery" { print $3 }' "$d/partitions.txt")
+    if d=$(newest_backup_with "$1") && [ -f "$d/partitions.txt" ]; then
+        s=$(awk -v n="$1" '$1 == n { print $3 }' "$d/partitions.txt")
         [ -n "$s" ] && { echo "$s"; return 0; }
     fi
     # Glass's bootloader is reported to answer a bare "0x": that is no size.
-    s=$(fastboot getvar partition-size:recovery 2>&1 | sed -n 's/^partition-size:recovery: *\(0x[0-9a-fA-F]\{1,\}\).*/\1/p')
+    s=$(fastboot getvar "partition-size:$1" 2>&1 | sed -n "s/^partition-size:$1: *\(0x[0-9a-fA-F]\{1,\}\).*/\1/p")
     [ -n "$s" ] && { echo $((s)); return 0; }
     return 1
 }
+recovery_size() { part_size recovery; }
 
 # The desktop's key for the Glass: GLASS_SSH_KEY, else the dedicated
 # ~/.ssh/glass_ed25519 (made 2026-10-07, its public half baked into the
@@ -336,6 +346,21 @@ case "$verb" in
         confirm "write $img ($isz bytes) into recovery ($size bytes); stock boot stays as it is"
         fb_flash recovery "$img"
         say "written. To boot it: fastboot reboot recovery (the bootloader's support is unverified), or from Android adb reboot recovery; a button combination for recovery is unverified"
+        ;;
+
+    flash-boot)
+        need fastboot
+        img=$(image_for "${1:-}")
+        [ -f "$img" ] || die "no $img (glass build)"
+        newest_backup_with boot > /dev/null || die "no backup holding boot.img (your way back): glass backup first"
+        size=$(part_size boot) || die "the boot partition's size is unknown: refusing"
+        isz=$(stat -c %s "$img")
+        [ "$isz" -le "$size" ] || die "$img is $isz bytes, boot holds $size: refusing"
+        confirm_typed "write $img ($isz bytes) into boot ($size bytes): Linux starts by itself from now on; stock Android's boot is in $(newest_backup_with boot)/boot.img (glass restore-partition DIR boot puts it back; fastboot stays reachable by the buttons)"
+        RESTORE_CTX=1
+        fb_flash boot "$img"
+        rm -f out/known_hosts_glass   # a new system makes a new host key
+        say "written: fastboot reboot starts it"
         ;;
 
     flash-rootfs)

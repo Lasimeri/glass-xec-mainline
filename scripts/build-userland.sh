@@ -82,6 +82,19 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     # Glass's own Wi-Fi firmware (5.90.195.122, 2014) beside linux-firmware's
     # (5.90.195.114, 2013): glass-wifi-fw switches between them.
     cp "$top/firmware/fw_bcmdhd.bin" "$r/lib/firmware/brcm/brcmfmac4330-sdio.glass.bin"
+    # The same firmware and the calibration under the names Google's bcmdhd
+    # driver (the stock kernel) takes through its module parameters; glass-wifi
+    # points it there.
+    mkdir -p "$r/lib/firmware/glass"
+    cp "$top/firmware/fw_bcmdhd.bin" "$top/firmware/bcmdhd.cal" "$r/lib/firmware/glass/"
+    echo glass > "$r/etc/hostname"
+    # The static ffmpeg (dl/ffmpeg-arm, scripts/fetch.sh) that decodes the
+    # desktop stream (scripts/glass-view.sh); 32 MB, so only when fetched.
+    ff=$(ls -d "$top"/dl/ffmpeg-arm/ffmpeg-*-armhf-static/ffmpeg 2> /dev/null | head -n 1)
+    if [ -n "$ff" ]; then
+        mkdir -p "$r/usr/local/bin"
+        cp "$ff" "$r/usr/local/bin/ffmpeg"
+    fi
     # What dbus' pre-install script would have done.
     grep -q '^messagebus:' "$r/etc/group" || echo 'messagebus:x:101:' >> "$r/etc/group"
     grep -q '^messagebus:' "$r/etc/passwd" ||
