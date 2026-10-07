@@ -39,24 +39,9 @@ pace=()
 if [ "$buffer_ms" -gt 0 ] 2> /dev/null; then
     pace=(-re -readrate_initial_burst "$(awk -v m="$buffer_ms" 'BEGIN { printf "%.3f", m / 1000 }')")
 fi
-# PACE=1 (the default): frames on an exact FPS grid. The portal sends a
-# frame only when the compositor draws one, so the source re-sends its last
-# frame every 1/FPS while the screen is still (keepalive-time), and
-# videorate puts every frame on the grid with timestamps to match; the
-# Glass then draws at even intervals. The hold is one compositor interval
-# (7 ms at 144 Hz; up to 1/FPS while the screen is still). PACE=0 lets
-# frames through as they come, at most FPS of them, never held.
 # The container: Matroska carries each frame's size, so the Glass releases a
 # frame the moment it lands; MPEG-TS makes it wait for the next frame's start.
 if gst-inspect-1.0 matroskamux > /dev/null 2>&1; then mux="matroskamux streamable=true"; else mux=mpegtsmux; fi
-pace_src=${PACE:-1}
-if [ "$pace_src" = 0 ]; then
-    rate=(! videorate drop-only=true max-rate="$fps")
-    keep=()
-else
-    rate=(! videorate ! "video/x-raw")
-    keep=(keepalive-time=$((1000 / fps)))
-fi
 desk=${DESK:-$HOME/deskpilot/target/release/desk}
 [ -x "$desk" ] || { echo "glass-view: no desk tool at $desk (DESK=...; cargo build --release in ~/deskpilot)" >&2; exit 1; }
 command -v gst-launch-1.0 > /dev/null || { echo "glass-view: gst-launch-1.0 is not installed (gstreamer, gst-plugin-pipewire, gst-plugins-bad for nvcodec)" >&2; exit 1; }
@@ -139,31 +124,47 @@ if [ "$out" = follow ]; then
         | "$top/scripts/glass" ssh "$sink"
     exit
 fi
-# No cropping of a monitor otherwise: the Glass screen (glass-screen.sh) is
-# captured as the window it is, its own 1280x720 surface, whole.
-
-
-# Nothing holds a frame anywhere: the portal sends a frame when the
-# compositor draws one (up to the monitor's rate), videorate in drop-only
-# mode lets at most FPS of them through and keeps none back (a plain
-# videorate would hold each frame until the next arrives), the encoder
-# emits every frame as it is encoded (zero latency, no B-frames, constant
-# rate), the muxer packetizes per frame, the Glass probes nothing before
-# drawing, decodes on one thread (frame threads delay output by one frame
-# each; one Cortex-A9 decodes this size at over 30 frames/s) and draws each
-# frame as it arrives. Expected glass-to-glass: about a tenth of a second.
-echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, $fps frames/s $([ "$pace_src" = 0 ] && echo "at most, unpaced" || echo "paced") -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
+# One rate stage, on the GPU: the capture asks KWin for at most SRC_FPS
+# (default 30; max-framerate is honoured, a fixed framerate is refused, and
+# KWin under-delivers against the cap, so asking a little above FPS keeps
+# every output slot fed with a fresh frame) and re-sends its last frame
+# while the screen is still; a queue takes frames off PipeWire's thread at
+# once; the CUDA compositor at latency 0 emits exactly FPS frames a second
+# on its own deadline (the newest frame for each slot, the extras dropped),
+# which is what the Glass presents on its fixed schedule (glass-fb).
+#
+# The downscale: the CUDA scalers are bilinear only, and one bilinear pass
+# at 6:1 (3840x2160 to 640x360) skips pixels, so text shimmers. Halving
+# steps first (bilinear at exactly 2:1 averages each 2x2 block, a true box
+# filter), then the compositor's last step is mild (960 to 640, 1.5:1).
+src_fps=${SRC_FPS:-30}
+steps=()
+if [ "$out" != window ]; then
+    sg=$("$desk" outputs 2>/dev/null | awk -v o="$out:" '$1 == o { print $2 }')
+    sw=${sg%x*}; sh=${sg#*x}
+    if [ -n "$sw" ] && [ -n "$sh" ]; then
+        while [ $((sw / 2)) -ge "$W" ] && [ $((sh / 2)) -ge "$H" ]; do
+            sw=$((sw / 2)); sh=$((sh / 2))
+            steps+=(! cudascale ! "video/x-raw(memory:CUDAMemory),width=$sw,height=$sh")
+        done
+    fi
+fi
+for e in cudacompositor cudascale; do
+    gst-inspect-1.0 "$e" > /dev/null 2>&1 || { echo "glass-view: GStreamer element $e is missing" >&2; exit 1; }
+done
+echo "glass-view: $out -> portal screencast (at most $src_fps/s), GPU downscale in $((${#steps[@]} / 4)) halving step(s) then to ${W}x${H}, $fps frames/s from the compositor, NVENC H.264 ${bitrate} kbit/s -> Glass over ssh; Ctrl-C stops" >&2
 if [ "$out" = window ]; then
     echo "glass-view: the first run asks in the portal's dialog which window to share: pick the Glass screen (KDE Wayland Compositor)" >&2
 else
     echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
 fi
 "$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
-    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw,max-framerate=$fps/1" \
-    ! videorate drop-only=true max-rate="$fps" \
+    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true keepalive-time=$((1000 / fps)) ! "video/x-raw,max-framerate=$src_fps/1" \
     ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
-    "${rate[@]}" \
-    ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
+    ! cudaupload "${steps[@]}" \
+    ! cudacompositor latency=0 sink_0::xpos=0 sink_0::ypos=0 sink_0::width="$W" sink_0::height="$H" \
+    ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,framerate=$fps/1" \
+    ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
     ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size="$fps" zerolatency=true bframes=0 rc-lookahead=0 \
     ! h264parse ! $mux ! fdsink fd=1 sync=false \
     | "$top/scripts/glass" ssh "$sink"

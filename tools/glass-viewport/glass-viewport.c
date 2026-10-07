@@ -12,8 +12,9 @@
  * leaves the monitor.
  *
  * The chain, after what the compositor and GStreamer do with time: the
- * capture is asked for FPS frames a second (KWin paces to a negotiated
- * rate better than it serves a higher one) and re-sends its last frame
+ * capture is asked for at most FPS + FPS/4 frames a second (KWin 6.7
+ * honours a maximum rate but under-delivers against it, so a little above
+ * FPS keeps every output slot fed with a fresh frame) and re-sends its last frame
  * while the screen is still; a queue takes the frames off PipeWire's
  * thread at once; the CUDA compositor is the one rate stage, at latency
  * zero, a WxH canvas with the whole monitor placed at (-vx,-vy) and kept
@@ -88,14 +89,13 @@ int main(int argc, char **argv) {
     char desc[2048];
     snprintf(desc, sizeof desc,
         "pipewiresrc fd=%s path=%s do-timestamp=true keepalive-time=%d ! video/x-raw,max-framerate=%d/1 "
-        "! videorate drop-only=true max-rate=%d "
         "! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream "
         "! cudaupload ! cudacompositor name=vp latency=0 sink_0::xpos=%d sink_0::ypos=%d sink_0::width=%d sink_0::height=%d "
         "! video/x-raw(memory:CUDAMemory),width=%d,height=%d,framerate=%d/1 "
         "! cudaconvertscale ! video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12 "
         "! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d vbv-buffer-size=%d gop-size=%d zerolatency=true bframes=0 rc-lookahead=0 "
         "! h264parse ! %s ! fdsink fd=1 sync=false",
-        fd, node, 1000 / fps, fps, fps, -vx, -vy, outw, outh, W, H, fps, GW, GH, kbit, kbit / fps, fps, mux);
+        fd, node, 1000 / fps, fps + fps / 4, -vx, -vy, outw, outh, W, H, fps, GW, GH, kbit, kbit / fps, fps, mux);
     GError *err = NULL;
     pipeline = gst_parse_launch(desc, &err);
     if (!pipeline || err) { fprintf(stderr, "glass-viewport: %s\n", err ? err->message : "no pipeline"); return 1; }
