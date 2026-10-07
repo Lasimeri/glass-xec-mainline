@@ -23,6 +23,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 15 frames/s; restarts the stream when the Glass returns |
 | `glass-audio.sh` | while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; when the Glass is gone, back to the stereo. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
 | `glass-tap.sh` | a tap on the touchpad toggles the voice mute (`ptt079 --toggle`) |
+| `glass-camerad.sh` | each time the Glass comes up (login, its boot, back from a lost connection), opens the camera window below if none is open; a window closed by hand stays closed until the Glass goes away and comes back |
 
 ## Reaching it
 
@@ -32,7 +33,7 @@ On the phone's hotspot the Glass is reached through the tailnet; nothing else on
 
 ## The camera
 
-`scripts/glass camera` opens the Glass's camera in its own window on the desktop: 960x540 (half the camera's 1920x1080 video size), 15 frames/s, H.264 at 768 kbit/s, no sound. Other values as `scripts/glass camera WxH FPS KBIT/S`. The work is done by the Ducati (the OMAP4's Cortex-M3 cores with Google's firmware): the OV5680 camera and the H.264 encoder there share the frames in place, the Glass's own CPU only passes on the stream. Closing the window stops the camera. On the Glass itself, `glass-camera -i` lists what the camera and the encoder offer; the protocol is in `docs/ducati-omx.md`.
+`scripts/glass camera` opens the Glass's camera in its own window on the desktop: 960x540 (half the camera's 1920x1080 video size), 15 frames/s, H.264 at 768 kbit/s, no sound. Other values as `scripts/glass camera WxH FPS KBIT/S`. The work is done by the Ducati (the OMAP4's Cortex-M3 cores with Google's firmware): the OV5680 camera and the H.264 encoder there share the frames in place, the Glass's own CPU only passes on the stream. The window opens by itself whenever the Glass comes up (`glass-camerad.sh`, above); closing it stops the camera until the Glass next comes up. On the Glass itself, `glass-camera -i` lists what the camera and the encoder offer; the protocol is in `docs/ducati-omx.md`.
 
 Face tracking, as the desktop's own camera has it: the window ("079 glass", on the camera screen) is the picture after the desktop's RTX 3090 Ti has decoded it (NVDEC) and `~/tts079/facetrack` has found faces in it (YuNet through OpenCL on the same card) and locked a reticle on the nearest, with the same HUD, low-light lift, scalers and FSR as the desktop's camera windows. Like the other cameras it writes a status line a second for the Phi Stream's camera monitor (`~/.local/share/phi-stream/dev/feeds/glass.status` and `.log`: faces, lock, box, motion, light, rate) and keeps its newest frame (`~/.cache/voice-079/cam/latest-glass.jpg`). `GLASS_CAMERA_TRACK=0 scripts/glass camera` shows the camera as it is. Faces are named too: `~/tts079/faceid` (C) matches each locked face's SFace embedding against the people enrolled (`faceid enroll NAME` from any tracked camera, `faceid list`, `faceid who -c glass`), the reticle showing the name, or UNKNOWN in yellow, and the status line `who=` and `sim=`.
 
@@ -97,6 +98,7 @@ On the desktop:
 | `/run/glass/rcS.log` on the Glass | this boot: boot steps, Wi-Fi, the clock |
 | `/run/glass/glass-console.log`, `/run/glass/tailscaled.log` | the display shell, Tailscale |
 | `$XDG_RUNTIME_DIR/glass-camera.log` | the camera window: sessions, frames and kbit/s every 5 s |
+| `$XDG_RUNTIME_DIR/glass-camerad.log` | when the camera window was opened for a Glass that came up |
 | `/var/log/glass-firmware.log`, `/sys/kernel/debug/remoteproc/remoteproc0/trace1` on the Glass | the Ducati: its start at boot, and its own messages (camera and encoder errors) |
 | `/proc/asound/card0/pcm0p/sub0/status` on the Glass | the sound device: its `trigger_time` must stay the same while playing (a changing one is the stream restarting) |
 | `scripts/glass reboot-test [N]`, `scripts/glass unplug-test [N]` | the repeatable checks: everything back after a reboot; every session on Wi-Fi when the cable comes out |

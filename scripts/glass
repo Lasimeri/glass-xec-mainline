@@ -12,7 +12,7 @@
 #                               checkout, nothing flashed: packages, scripts,
 #                               tools rebuilt where changed, restarts; user
 #                               settings kept (scripts/on-glass/update.sh)
-#   glass setup-desktop         this desktop's side: picture, sound and tap
+#   glass setup-desktop         this desktop's side: picture, sound, tap and camera
 #                               supervisors at login and started now, and what
 #                               they need, each with its fix
 #   glass root-boot             fastboot boot out/boot-xe24-adbroot.img: stock
@@ -318,12 +318,12 @@ case "$verb" in
                 sed -n 's/.*glass-fb: \([0-9.]*\) frames\/s shown.*, \([0-9]*\) late slots.*/\1 frames\/s, \2 late slots in the last 5 s/p')
             printf "  %-12s %s\n" stream "${last:-no report yet}"
             n=0; sup=""
-            for s in glass-viewd glass-audio glass-tap; do
+            for s in glass-viewd glass-audio glass-tap glass-camerad; do
                 if pgrep -f "scripts/$s[.]sh$" > /dev/null; then sup="$sup${sup:+, }$s up"; else sup="$sup${sup:+, }$s DOWN"; fi
                 [ -f "$HOME/.config/autostart/$s.desktop" ] && n=$((n + 1))
             done
             printf "  %-12s %s\n" supervisors "$sup"
-            printf "  %-12s %s\n" autostart "$n of 3 at login (glass setup-desktop sets them up)"
+            printf "  %-12s %s\n" autostart "$n of 4 at login (glass setup-desktop sets them up)"
         fi
         ;;
 
@@ -357,8 +357,8 @@ case "$verb" in
         ;;
 
     setup-desktop)
-        # This desktop's side, repeatable: the three supervisors (picture,
-        # sound, tap) start at login from ~/.config/autostart, and now if
+        # This desktop's side, repeatable: the four supervisors (picture,
+        # sound, tap, camera) start at login from ~/.config/autostart, and now if
         # they are not running; then what they need, each with its fix.
         a=$HOME/.config/autostart
         mkdir -p "$a"
@@ -369,7 +369,8 @@ case "$verb" in
         entry glass-viewd "Glass view" "The desktop's monitor and a shell on the Google Glass whenever it is up (glass-xec scripts/glass-viewd.sh)"
         entry glass-audio "Glass audio" "Desktop sound to the Google Glass while it is on the network (glass-xec scripts/glass-audio.sh)"
         entry glass-tap "Glass tap mute" "A tap on the Google Glass touchpad toggles the voice mute (glass-xec scripts/glass-tap.sh)"
-        say "autostart: $a/glass-viewd.desktop, glass-audio.desktop, glass-tap.desktop"
+        entry glass-camerad "Glass camera" "The Google Glass camera in its own window whenever the Glass comes up (glass-xec scripts/glass-camerad.sh)"
+        say "autostart: $a/glass-viewd.desktop, glass-audio.desktop, glass-tap.desktop, glass-camerad.desktop"
         # The sound's switches in the application launcher (and KRunner:
         # type "glass audio"); a keyboard shortcut can be given to any of
         # them in System Settings, Shortcuts.
@@ -383,7 +384,7 @@ case "$verb" in
         launcher glass-audio-glass "Glass audio: sound to the Glass" glass "The desktop's sound and the voice to the Google Glass, back to the stereo by itself when it leaves"
         launcher glass-audio-stereo "Glass audio: sound to the stereo" stereo "The desktop's sound and the voice to the stereo, and it stays there"
         say "launchers: $l/glass-audio-toggle.desktop, glass-audio-glass.desktop, glass-audio-stereo.desktop"
-        for s in glass-viewd glass-audio glass-tap; do
+        for s in glass-viewd glass-audio glass-tap glass-camerad; do
             if pgrep -f "scripts/$s[.]sh$" > /dev/null; then
                 say "$s: running"
             else
