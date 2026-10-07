@@ -39,6 +39,21 @@ pace=()
 if [ "$buffer_ms" -gt 0 ] 2> /dev/null; then
     pace=(-re -readrate_initial_burst "$(awk -v m="$buffer_ms" 'BEGIN { printf "%.3f", m / 1000 }')")
 fi
+# PACE=1 (the default): frames on an exact FPS grid. The portal sends a
+# frame only when the compositor draws one, so the source re-sends its last
+# frame every 1/FPS while the screen is still (keepalive-time), and
+# videorate puts every frame on the grid with timestamps to match; the
+# Glass then draws at even intervals. The hold is one compositor interval
+# (7 ms at 144 Hz; up to 1/FPS while the screen is still). PACE=0 lets
+# frames through as they come, at most FPS of them, never held.
+pace_src=${PACE:-1}
+if [ "$pace_src" = 0 ]; then
+    rate=(! videorate drop-only=true max-rate="$fps")
+    keep=()
+else
+    rate=(! videorate ! "video/x-raw,framerate=$fps/1")
+    keep=(keepalive-time=$((1000 / fps)))
+fi
 desk=${DESK:-$HOME/deskpilot/target/release/desk}
 [ -x "$desk" ] || { echo "glass-view: no desk tool at $desk (DESK=...; cargo build --release in ~/deskpilot)" >&2; exit 1; }
 command -v gst-launch-1.0 > /dev/null || { echo "glass-view: gst-launch-1.0 is not installed (gstreamer, gst-plugin-pipewire, gst-plugins-bad for nvcodec)" >&2; exit 1; }
@@ -70,11 +85,11 @@ glass_ffmpeg || exit 1
 # drawing, decodes on one thread (frame threads delay output by one frame
 # each; one Cortex-A9 decodes this size at over 30 frames/s) and draws each
 # frame as it arrives. Expected glass-to-glass: about a tenth of a second.
-echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, up to $fps frames/s -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
+echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, $fps frames/s $([ "$pace_src" = 0 ] && echo "at most, unpaced" || echo "paced") -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
 echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
 "$desk" cast -- gst-launch-1.0 -q \
-    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true ! "video/x-raw" \
-    ! videorate drop-only=true max-rate="$fps" \
+    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw" \
+    "${rate[@]}" \
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
     ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" gop-size="$fps" zerolatency=true bframes=0 \
     ! h264parse ! mpegtsmux ! fdsink fd=1 sync=false \
