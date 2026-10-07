@@ -64,6 +64,12 @@ if [ -z "$out" ]; then
     out=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/Output:/ { o=$3 } /priority 1/ { print o; exit }')
     [ -n "$out" ] || out=DP-1
 fi
+# OUTPUT "window": one window instead of a monitor (the portal's dialog asks
+# which; the Glass screen of glass-screen.sh is the one meant), captured at
+# the window's own size, so a 1280x720 window reaches the Glass at an exact
+# 2:1 and its text at the size the nested session draws it.
+castopt=()
+[ "$out" = window ] && castopt=(--window)
 
 # The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
 # pushed into RAM once per boot on an initramfs-only Glass.
@@ -91,7 +97,7 @@ glass_ffmpeg || exit 1
 # frame as it arrives. Expected glass-to-glass: about a tenth of a second.
 echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, $fps frames/s $([ "$pace_src" = 0 ] && echo "at most, unpaced" || echo "paced") -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
 echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
-"$desk" cast -- gst-launch-1.0 -q \
+"$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
     pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw" \
     "${rate[@]}" \
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
