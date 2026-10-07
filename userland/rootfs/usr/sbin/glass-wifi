@@ -71,6 +71,10 @@ case "${1:-}" in
         ;;
     up)
         supplicant
+        # No power save: a sleeping client gets its packets in bursts at
+        # each beacon and TCP stalls on them (the stream showed one frame
+        # every two seconds, 2026-10-07); the cost is some battery.
+        iw dev wlan0 set power_save off 2> /dev/null
         # Backgrounds and keeps asking when the lease is slow (an access
         # point not yet up at boot); the router learns the name "glass".
         udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 || die "udhcpc did not start"
