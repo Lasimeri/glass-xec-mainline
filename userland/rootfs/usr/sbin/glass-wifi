@@ -49,11 +49,13 @@ case "${1:-}" in
         fi
         [ ${#pass} -ge 8 ] && [ ${#pass} -le 63 ] || die "a WPA2 passphrase is 8 to 63 characters"
         conf
-        # wpa_passphrase reads the passphrase from stdin (never an argument:
-        # arguments show in ps) and prints the network block with the
-        # derived key; the commented plain line is dropped.
-        block=$(printf '%s\n' "$pass" | wpa_passphrase "$ssid" | grep -v '#psk=') || die "wpa_passphrase failed"
+        # wpa_passphrase prints the network block with the derived key (on
+        # stdin it wants a terminal: the passphrase goes as its argument, in
+        # ps for the milliseconds it runs, root being the only user here);
+        # the commented plain line is dropped.
+        block=$(wpa_passphrase "$ssid" "$pass" | grep -v '#psk=') || die "wpa_passphrase failed"
         pass=
+        "$0" forget "$ssid"   # stored again: the old block goes
         printf '%s\n' "$block" >> "$c"
         echo "glass-wifi: $ssid stored (derived key only); glass-wifi up"
         [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 reconfigure > /dev/null

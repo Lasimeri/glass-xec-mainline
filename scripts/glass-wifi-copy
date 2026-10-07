@@ -1,0 +1,98 @@
+#!/bin/bash
+# glass-wifi-copy: saved Wi-Fi networks from a NetworkManager machine onto
+# the Glass, the passphrases never shown, typed or written here.
+#   scripts/glass-wifi-copy [NAME...]
+#       this machine's networks (NetworkManager keeps their secrets for root:
+#       run it with sudo; the Glass is reached as the user who ran sudo)
+#   scripts/glass-wifi-copy --from USER@HOST [NAME...]
+#       a laptop's networks over ssh (password authentication through the
+#       askpass helper the voice-079 scripts use, and sudo there with the
+#       same password, read from $LAPTOP_SSH_PASS_FILE)
+# NAME limits the copy to those profiles; otherwise every Wi-Fi profile with
+# a WPA passphrase goes. Each passphrase travels only inside ssh sessions
+# (laptop to here, here to the Glass) and lives in this script's memory in
+# between; the Glass keeps the derived key alone (glass-wifi add). Then the
+# Glass joins and its address is printed.
+set -euo pipefail
+top=$(cd "$(dirname "$0")/.." && pwd)
+from=
+if [ "${1:-}" = --from ]; then
+    from=${2:?--from USER@HOST}
+    shift 2
+fi
+only=("$@")
+
+glass() { "$top/scripts/glass" ssh "$@"; }
+
+# nmcli on the source: here (as root) or on the laptop (sudo with the
+# password on its stdin, which the askpass helper also gives ssh).
+if [ -n "$from" ]; then
+    pf=${LAPTOP_SSH_PASS_FILE:-$HOME/.config/voice-079/laptop-ssh-pass}
+    [ -r "$pf" ] || { echo "glass-wifi-copy: no password file $pf" >&2; exit 1; }
+    A=$HOME/.cache/voice-079/laptop-askpass.sh
+    [ -x "$A" ] || { echo "glass-wifi-copy: no askpass helper $A" >&2; exit 1; }
+    lap() {   # CMD, stdin passed through
+        env SSH_ASKPASS="$A" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
+            ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+                -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "$from" "$1"
+    }
+    source_list() { lap "nmcli -t -f NAME,TYPE connection show" < /dev/null; }
+    source_secrets() {   # NAME: three lines ssid, key-mgmt, psk
+        lap "sudo -S -p '' nmcli -s -t -f 802-11-wireless.ssid,802-11-wireless-security.key-mgmt,802-11-wireless-security.psk connection show '$1'" < "$pf"
+    }
+    who="$from"
+else
+    if [ "$(id -u)" != 0 ]; then
+        echo "glass-wifi-copy: this machine's secrets need root: sudo $0 $*" >&2
+        exit 1
+    fi
+    u=${SUDO_USER:-}
+    [ -n "$u" ] || { echo "glass-wifi-copy: run through sudo, so the Glass is reached as you" >&2; exit 1; }
+    glass() { sudo -u "$u" -H "$top/scripts/glass" ssh "$@"; }
+    source_list() { nmcli -t -f NAME,TYPE connection show; }
+    source_secrets() { nmcli -s -t -f 802-11-wireless.ssid,802-11-wireless-security.key-mgmt,802-11-wireless-security.psk connection show "$1"; }
+    who="this machine"
+fi
+
+mapfile -t names < <(source_list | awk -F: '$2 == "802-11-wireless" { print $1 }')
+[ ${#names[@]} -gt 0 ] || { echo "glass-wifi-copy: no Wi-Fi profiles in NetworkManager on $who" >&2; exit 1; }
+if [ ${#only[@]} -gt 0 ]; then
+    sel=()
+    for n in "${names[@]}"; do for o in "${only[@]}"; do [ "$n" = "$o" ] && sel+=("$n"); done; done
+    names=("${sel[@]}")
+    [ ${#names[@]} -gt 0 ] || { echo "glass-wifi-copy: none of ${only[*]} is a Wi-Fi profile on $who" >&2; exit 1; }
+fi
+echo "glass-wifi-copy: ${#names[@]} Wi-Fi profile(s) on $who: ${names[*]}"
+
+copied=0
+for n in "${names[@]}"; do
+    ssid=; km=; psk=
+    while IFS=: read -r k v; do
+        case "$k" in
+            802-11-wireless.ssid) ssid=$v ;;
+            802-11-wireless-security.key-mgmt) km=$v ;;
+            802-11-wireless-security.psk) psk=$v ;;
+        esac
+    done < <(source_secrets "$n" 2> /dev/null || true)
+    if [ -z "$ssid" ]; then echo "  $n: no ssid readable (secrets agent-owned, or sudo refused)"; continue; fi
+    case "$km" in
+        wpa-psk | sae) ;;
+        *) echo "  $n ($ssid): key management '$km' is not a passphrase network, skipped"; continue ;;
+    esac
+    if [ -z "$psk" ]; then echo "  $n ($ssid): passphrase not readable here (kept in a wallet?), skipped"; continue; fi
+    q=${ssid//\'/\'\\\'\'}
+    if printf '%s\n' "$psk" | glass "glass-wifi add '$q' > /dev/null"; then
+        echo "  $n ($ssid): stored on the Glass"
+        copied=$((copied + 1))
+    else
+        echo "  $n ($ssid): the Glass refused it"
+    fi
+    psk=
+done
+[ $copied -gt 0 ] || { echo "glass-wifi-copy: nothing copied" >&2; exit 1; }
+
+echo "glass-wifi-copy: joining"
+glass "glass-wifi up > /dev/null 2>&1; sleep 2; glass-wifi status" | grep -E "^(ssid|wpa_state)=|inet " || {
+    echo "glass-wifi-copy: the Glass did not join; on it: glass-wifi status, dmesg | grep -i dhd" >&2
+    exit 1
+}
