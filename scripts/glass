@@ -36,7 +36,9 @@ set -euo pipefail
 top=$(cd "$(dirname "$0")/.." && pwd)
 cd "$top"
 
-GLASS_IP=172.16.42.1
+# The Glass's address: the USB link's fixed one, or GLASS_IP for its Wi-Fi
+# address (glass-wifi status on the Glass prints it).
+GLASS_IP=${GLASS_IP:-172.16.42.1}
 ALLOW=(boot recovery system cache userdata)
 FORBID=(xloader bootloader fpga efs bootconfig misc)
 YES=0
