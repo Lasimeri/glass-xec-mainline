@@ -146,8 +146,14 @@ while :; do
         volume_link "$addr" &
         link=$!
         set +m
+        # Ended when the Glass is on a better path or this one went away
+        # (glass-pathguard.sh); the loop starts it again there, in that
+        # path's mode (raw at home, Opus over the tailnet).
+        "$top/scripts/glass-pathguard.sh" "$addr" "$session" >> "$log" 2>&1 &
+        guard=$!
         wait $session
         kill -- -"$link" 2> /dev/null
+        kill $guard 2> /dev/null
         restore
     fi
     sleep 5

@@ -17,6 +17,9 @@
 #   glass-wifi use SSID | auto        join that network now (until "auto" or
 #                                     a reboot), or choose by priority again
 #   glass-wifi up | down | scan | status | list
+#                                     (up also starts a watchdog that brings
+#                                     Wi-Fi back when it stays down; what it
+#                                     did is kept in /var/log/glass-wifi.log)
 c=/etc/wpa_supplicant/wpa_supplicant.conf
 die() { echo "glass-wifi: $*" >&2; exit 1; }
 
@@ -47,6 +50,18 @@ supplicant() {
     wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid || die "wpa_supplicant did not start"
 }
 
+# What Wi-Fi did, kept across boots in /var/log/glass-wifi.log (the last
+# 1000 lines; /run is lost at a reboot, and with it why the Glass dropped
+# off, seen 2026-10-07) and in /run/glass/rcS.log with the boot.
+wlog() {
+    mkdir -p /run/glass /var/log
+    echo "glass-wifi: $(date +%T) $*" >> /run/glass/rcS.log
+    echo "$(date '+%F %T') $*" >> /var/log/glass-wifi.log
+    if [ "$(wc -l < /var/log/glass-wifi.log)" -gt 1200 ]; then
+        tail -n 1000 /var/log/glass-wifi.log > /var/log/glass-wifi.log.new && mv /var/log/glass-wifi.log.new /var/log/glass-wifi.log
+    fi
+}
+
 # Fixed addresses by network (glass-wifi static), a line each: SSID, ADDR/LEN,
 # gateway, DNS, tab-separated (SSIDs may hold spaces).
 st=/etc/glass/wifi-static
@@ -66,15 +81,15 @@ address() {
         fi
         ip route replace default via "$4" dev wlan0
         echo "nameserver ${5:-$4}" > /etc/resolv.conf
-        echo "glass-wifi: $(date +%T) on $1 at $3 (fixed)" >> /run/glass/rcS.log
+        wlog "on $1 at $3 (fixed)"
     elif ! dhcp_running; then
         ip -4 addr flush dev wlan0   # a fixed address from another network goes
         udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 > /dev/null 2>&1
-        echo "glass-wifi: $(date +%T) on $1, address by DHCP" >> /run/glass/rcS.log
+        wlog "on $1, address by DHCP"
     elif [ "$2" = 1 ]; then
         p=$(cat /run/udhcpc.wlan0.pid)
         kill -USR2 "$p" 2> /dev/null; sleep 1; kill -USR1 "$p" 2> /dev/null
-        echo "glass-wifi: $(date +%T) on $1 (another network): new DHCP lease asked for" >> /run/glass/rcS.log
+        wlog "on $1 (another network): new DHCP lease asked for"
     fi
     clock
 }
@@ -92,7 +107,7 @@ clock() {
         while [ $i -lt 12 ]; do
             if ntpd -n -q -p pool.ntp.org > /dev/null 2>&1; then
                 touch /run/glass/clock-ok
-                echo "glass-wifi: $(date +%T) clock set" >> /run/glass/rcS.log
+                wlog "clock set"
                 exit 0
             fi
             sleep 10; i=$((i + 1))
@@ -171,9 +186,48 @@ case "${1:-}" in
         if wpa_cli -i wlan0 status 2> /dev/null | grep -q '^wpa_state=COMPLETED'; then
             "$0" wlan0 CONNECTED
         fi
+        # The watchdog (one): Wi-Fi brought back when it stays down.
+        if ! { [ -f /run/glass-wifi-watch.pid ] && kill -0 "$(cat /run/glass-wifi-watch.pid)" 2> /dev/null; }; then
+            setsid "$0" watch > /dev/null 2>&1 < /dev/null &
+        fi
         ;;
+    watch)
+        # Every 10 s: joined with no address (the join's address step went
+        # wrong) -> the address set again; not joined for 30 s -> a
+        # reassociation, the networks in sight logged; for 90 s -> Wi-Fi
+        # restarted (down, up). A stored network in range then comes back
+        # by itself, as the home network did not on 2026-10-07.
+        echo $$ > /run/glass-wifi-watch.pid
+        down=0
+        while :; do
+            sleep 10
+            st=$(wpa_cli -i wlan0 status 2> /dev/null | sed -n 's/^wpa_state=//p')
+            if [ "$st" = COMPLETED ]; then
+                down=0
+                if ! ip -4 addr show wlan0 | grep -q 'inet '; then
+                    wlog "joined but no address: setting it again"
+                    "$0" wlan0 CONNECTED
+                fi
+                continue
+            fi
+            down=$((down + 10))
+            if [ $down = 30 ]; then
+                wlog "not joined for 30 s (state ${st:-none}): reassociating; in sight: $(wpa_cli -i wlan0 scan_results 2> /dev/null | awk -F '\t' 'NR > 1 && $5 != "" { printf "%s %s, ", $5, $3 }')"
+                wpa_cli -i wlan0 reassociate > /dev/null 2>&1
+            elif [ $down -ge 90 ]; then
+                wlog "not joined for 90 s: restarting Wi-Fi"
+                "$0" down > /dev/null 2>&1
+                sleep 2
+                "$0" up > /dev/null 2>&1
+                down=0
+            fi
+        done ;;
     wlan[0-9]*)
         # wpa_cli -a: "glass-wifi wlan0 CONNECTED|DISCONNECTED".
+        if [ "${2:-}" = DISCONNECTED ]; then
+            wlog "left $(cat /run/glass/wifi-ssid 2> /dev/null || echo 'the network')"
+            exit 0
+        fi
         [ "${2:-}" = CONNECTED ] || exit 0
         mkdir -p /run/glass
         ssid=$(wpa_cli -i "$1" status 2> /dev/null | sed -n 's/^ssid=//p')
@@ -224,6 +278,10 @@ case "${1:-}" in
         if [ "$(cat /run/glass/wifi-ssid 2> /dev/null)" = "$ssid" ]; then address "$ssid" 0; fi
         ;;
     down)
+        # The watchdog too (a down by hand stays down), unless it is the one
+        # restarting Wi-Fi (it is then this command's parent).
+        w=$(cat /run/glass-wifi-watch.pid 2> /dev/null || true)
+        if [ -n "$w" ] && [ "$w" != "$PPID" ]; then kill "$w" 2> /dev/null; rm -f /run/glass-wifi-watch.pid; fi
         [ -f /run/wpa_cli.pid ] && kill "$(cat /run/wpa_cli.pid)" 2> /dev/null
         [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null
         [ -f /run/wpa_supplicant.pid ] && kill "$(cat /run/wpa_supplicant.pid)" 2> /dev/null

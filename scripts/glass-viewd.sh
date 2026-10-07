@@ -28,7 +28,19 @@ while :; do
             # hold the lock after the supervisor ends and block the next start.
             setsid konsole --separate -p tabtitle="Glass shell" -e "$top/scripts/glass" ssh > /dev/null 2>&1 < /dev/null 9>&- &
         fi
-        BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 15 >> "$log" 2>&1 9>&-
+        # One address for the stream (home Wi-Fi, USB or the tailnet), and
+        # a guard that ends it when the Glass is on a better path or this
+        # one went away (glass-pathguard.sh): it starts again there. The
+        # stream in its own process group (set -m) so it ends whole.
+        addr=$("$top/scripts/glass" addr 2> /dev/null || true)
+        set -m
+        GLASS_IP=$addr BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 15 >> "$log" 2>&1 9>&- &
+        view=$!
+        set +m
+        "$top/scripts/glass-pathguard.sh" "$addr" "-$view" >> "$log" 2>&1 9>&- &
+        guard=$!
+        wait $view
+        kill $guard 2> /dev/null
         echo "glass-viewd: $(date +%T) stream ended" >> "$log"
         # The decoder on the Glass, if the session died under it: ffmpeg
         # first, so glass-fb sees the end of its input and puts the console

@@ -20,7 +20,12 @@ flock -n 9 || { echo "glass-tap: already running" >&2; exit 0; }
 log=$run/glass-tap.log
 echo "glass-tap: $(date +%T) started" >> "$log"
 while :; do
-    "$top/scripts/glass" ssh /usr/local/bin/glass-tap < /dev/null 2>> "$log" |
+    # One address for the session; in its own process group (set -m) so the
+    # path guard can end it whole when the Glass is on a better path or this
+    # one went away (glass-pathguard.sh); it starts again there.
+    addr=$("$top/scripts/glass" addr 2> /dev/null || true)
+    set -m
+    GLASS_IP=$addr "$top/scripts/glass" ssh /usr/local/bin/glass-tap < /dev/null 2>> "$log" |
         while read -r g; do
             case "$g" in
                 tap)
@@ -28,7 +33,14 @@ while :; do
                     echo "glass-tap: $(date +%T) tap: $([ -e "$run/speak-079/muted" ] && echo muted || echo listening)" >> "$log"
                     ;;
             esac
-        done
+        done &
+    session=$!
+    set +m
+    group=$(ps -o pgid= -p "$session" 2> /dev/null | tr -d ' ')
+    "$top/scripts/glass-pathguard.sh" "$addr" "-${group:-$session}" >> "$log" 2>&1 &
+    guard=$!
+    wait $session
+    kill $guard 2> /dev/null
     echo "glass-tap: $(date +%T) session ended; again in 5 s" >> "$log"
     sleep 5
 done

@@ -8,7 +8,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 | part | what it does |
 | --- | --- |
-| Wi-Fi (`glass-wifi up`) | joins the stored networks by `priority`: the phone's hotspot first when it is on, else home; the address follows the network joined: fixed at home, DHCP elsewhere |
+| Wi-Fi (`glass-wifi up`) | joins the stored networks by `priority`: the phone's hotspot first when it is on, else home; the address follows the network joined: fixed at home, DHCP elsewhere; a watchdog reassociates after 30 s without a network and restarts Wi-Fi after 90 s |
 | clock | set from the internet once an address exists, retried for two minutes |
 | Tailscale (`tailscaled`) | the Glass on the tailnet as `glass`, reachable from the desktop on any network |
 | display shell (`glass-console`) | a shell with a blinking cursor and two status lines (network and address, tailnet address, battery), shown whenever no stream is |
@@ -27,7 +27,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 `scripts/glass ssh` finds the Glass by itself, in this order: the remembered address (`out/glass-ip`, at home the fixed 192.168.0.80), the router's name `glass`, the USB cable (172.16.42.1), the tailnet address, then a search of the home network by the Wi-Fi MAC. Every address is checked against one pinned host key.
 
-On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 1500 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames.
+On the phone's hotspot the Glass is reached through the tailnet; nothing else on the home network can reach a hotspot client. Over the tailnet the stream switches to a remote mode by itself: video at 12 frames/s and 1500 kbit/s with about 250 ms (3 frames) of cushion, sound as Opus held 400 ms behind. The hotspot path measured 2026-10-07 delivered about 1.7 Mbit/s: 1200 kbit/s at 15/s held 15.0 frames/s, 2000 kbit/s at 12/s showed 9.4 to 11.4 with late frames. When the Glass changes network, every session follows by itself: a path guard beside each one (`scripts/glass-pathguard.sh`) ends a tailnet session as soon as home Wi-Fi or the USB cable answers, and a home session after two missed pings; its supervisor starts it again on the new path, in that path's mode. The Glass shell window is left alone (it keeps working over the tailnet, and reopens if its path dies).
 
 `scripts/glass status` shows the whole state in one table: how the Glass is reachable, battery, board temperature, CPU clock, display and sound settings, what runs on it, the last stream report and the desktop's supervisors.
 
@@ -69,5 +69,6 @@ On the desktop:
 | `scripts/glass status` | the whole state first |
 | `$XDG_RUNTIME_DIR/glass-viewd.log` | the stream: a line every 5 s with frames shown, dropped, late |
 | `$XDG_RUNTIME_DIR/glass-audio.log` | the sound: glass-play's delay, corrections and underruns every 30 s |
-| `/run/glass/rcS.log` on the Glass | boot, Wi-Fi joins, the address taken, the clock |
+| `/var/log/glass-wifi.log` on the Glass | Wi-Fi joins and drops, the address taken, the watchdog's actions, kept across reboots |
+| `/run/glass/rcS.log` on the Glass | this boot: boot steps, Wi-Fi, the clock |
 | `/run/glass/glass-console.log`, `/run/glass/tailscaled.log` | the display shell, Tailscale |
