@@ -1,0 +1,71 @@
+#!/bin/sh
+# glass-audio: the Glass's sound output (TWL6040 codec behind the OMAP4 ABE,
+# ALSA card 0 "Notle"). Routes the ABE's Multimedia stream (hw:0,0) to one
+# of the codec's outputs:
+#   glass-audio route earphone|handsfree|headset [VOLUME%]
+#   glass-audio off
+#   glass-audio test               a tone on each output in turn, low to high
+#                                  pitch: earphone 440 Hz, handsfree 660 Hz,
+#                                  headset 880 Hz (which one is the bone
+#                                  conduction transducer is found by ear)
+#   glass-audio play               raw s16le 48 kHz mono on stdin to the ABE's
+#                                  Multimedia stream (both channels), held
+#                                  in a buffer of BUFFER_US microseconds
+# The route chosen last is kept in /etc/glass/audio-route.
+set -u
+conf=/etc/glass/audio-route
+mix() { amixer -q -c 0 cset "name=$1" "$2" > /dev/null 2>&1 || echo "glass-audio: $1 = $2 refused" >&2; }
+common() {
+    mix 'DL1 Mixer Multimedia' on
+    mix 'DL1 Media Playback Volume' 120
+    # DL1 Mixer reaches the PDM outputs only through the sidetone mixer
+    # (the ABE's DAPM graph: DL1 Mixer -> Sidetone Mixer -> DL1 PDM).
+    mix 'Sidetone Mixer Playback' on
+    mix 'DL1 PDM Switch' on
+    mix 'TWL6040 Power Mode' 'High-Performance'
+}
+quiet() {
+    mix 'Earphone Playback Switch' off
+    mix 'Handsfree Left Playback' Off
+    mix 'Handsfree Right Playback' Off
+    mix 'Headset Left Playback' Off
+    mix 'Headset Right Playback' Off
+    mix 'DL1 PDM_DL2 Switch' off
+}
+route() {   # OUTPUT PERCENT
+    common
+    quiet
+    p=${2:-50}
+    case "$1" in
+        earphone)
+            mix 'Earphone Playback Volume' $((15 * p / 100))
+            mix 'Earphone Playback Switch' on ;;
+        handsfree)
+            mix 'DL1 PDM_DL2 Switch' on
+            mix 'Handsfree Playback Volume' "$((29 * p / 100)),$((29 * p / 100))"
+            mix 'Handsfree Left Playback' 'HF DAC'
+            mix 'Handsfree Right Playback' 'HF DAC' ;;
+        headset)
+            mix 'Headset Playback Volume' "$((15 * p / 100)),$((15 * p / 100))"
+            mix 'Headset Left Playback' 'HS DAC'
+            mix 'Headset Right Playback' 'HS DAC' ;;
+        *) echo "glass-audio route earphone|handsfree|headset [VOLUME%]" >&2; return 1 ;;
+    esac
+}
+tone() {   # HZ SECONDS
+    /usr/local/bin/ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=$1:duration=$2:sample_rate=48000" \
+        -ac 2 -f s16le - | aplay -q -D hw:0,0 -f S16_LE -r 48000 -c 2 -t raw
+}
+case "${1:-}" in
+    route) route "${2:-}" "${3:-50}" && { mkdir -p /etc/glass; echo "$2 ${3:-50}" > "$conf"; } ;;
+    off) quiet; mix 'DL1 Mixer Multimedia' off ;;
+    test)
+        route earphone 50; tone 440 1.5; sleep 1
+        route handsfree 50; tone 660 1.5; sleep 1
+        route headset 50; tone 880 1.5
+        quiet ;;
+    play)
+        [ -f "$conf" ] && route $(cat "$conf")
+        exec aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="${BUFFER_US:-100000}" ;;
+    *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
