@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <stdint.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -38,6 +39,16 @@
 
 #define RING 4
 
+/* OMAP4 display controller (TRM: DISPC at 0x48041000), as the initramfs's
+ * display handoff already uses them. */
+#define DISPC_BASE 0x48041000u
+#define DISPC_GFX_BA0 0x080
+#define DISPC_GFX_BA1 0x084
+#define DISPC_CONTROL2 0x238
+#define DISPC_GO_LCD2 0x20
+static volatile uint32_t *dispc;
+static unsigned long smem;
+
 static int fb, pages, use_omap = -1;
 static unsigned char *mem;
 static size_t page, frame, row, line;
@@ -47,6 +58,7 @@ static int shown = 0;
 static unsigned char *ring[RING];
 static int head = 0, tail = 0, count = 0, eof = 0;
 static unsigned long dropped = 0;
+static unsigned char *prev;   /* the last frame shown, to count repeats */
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 
@@ -102,6 +114,24 @@ static void show(const unsigned char *buf) {
     var.yoffset = var.yres * next;
     var.xoffset = 0;
     ioctl(fb, FBIOPAN_DISPLAY, &var);
+    if (dispc) {
+        /* The pan above is accepted and never reaches the hardware on the
+         * stock kernel (omapfb under dsscomp; seen 2026-10-07: GFX_BA0 stayed
+         * at the first page, so one frame in three was ever seen). Point the
+         * graphics layer at the page directly and set LCD2's GO bit: the
+         * controller takes the new address at its next vertical sync and
+         * clears GO. */
+        uint32_t addr = (uint32_t) (smem + page * next);
+        dispc[DISPC_GFX_BA0 / 4] = addr;
+        dispc[DISPC_GFX_BA1 / 4] = addr;
+        dispc[DISPC_CONTROL2 / 4] |= DISPC_GO_LCD2;
+        for (int i = 0; i < 40 && (dispc[DISPC_CONTROL2 / 4] & DISPC_GO_LCD2); i++) {
+            struct timespec ts = { 0, 250000 };
+            nanosleep(&ts, NULL);
+        }
+        shown = next;
+        return;
+    }
     if (use_omap != 1) {
         unsigned vs = 0;
         if (ioctl(fb, FBIO_WAITFORVSYNC, &vs) == 0) use_omap = 0;
@@ -142,14 +172,28 @@ int main(int argc, char **argv) {
         if (ioctl(fb, FBIOPUT_VSCREENINFO, &var)) perror("glass-fb: virtual height");
     }
     for (int i = 0; i < RING; i++) { ring[i] = malloc(frame); if (!ring[i]) return 1; }
-    fprintf(stderr, "glass-fb: %ux%u, %u bits, %d pages, %s\n", var.xres, var.yres, var.bits_per_pixel, pages,
-            fps ? "paced" : "as frames arrive");
+    /* The display controller, when the graphics layer scans this framebuffer
+     * (its address within our pages): flips go to it directly. */
+    smem = fix.smem_start;
+    int memfd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (memfd >= 0) {
+        void *p = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, DISPC_BASE);
+        if (p != MAP_FAILED) {
+            volatile uint32_t *d = p;
+            uint32_t ba = d[DISPC_GFX_BA0 / 4];
+            if (ba >= smem && ba < smem + page * pages) dispc = d;
+            else fprintf(stderr, "glass-fb: the graphics layer scans 0x%08x, not this framebuffer (0x%08lx): pan only\n", ba, smem);
+        }
+    }
+    fprintf(stderr, "glass-fb: %ux%u, %u bits, %d pages, %s, flips %s\n", var.xres, var.yres, var.bits_per_pixel, pages,
+            fps ? "paced" : "as frames arrive", dispc ? "by the display controller's GO bit" : "by pan");
 
     pthread_t rt;
     pthread_create(&rt, NULL, reader, &cushion);
 
     double period = fps ? 1.0 / fps : 0, next_t = 0, last_shown = 0, max_gap = 0, report = now_s() + 5;
-    unsigned long frames = 0, late = 0, rep_frames = 0, rep_drop = 0, rep_late = 0;
+    unsigned long frames = 0, late = 0, rep_frames = 0, rep_drop = 0, rep_late = 0, rep_same = 0;
+    prev = malloc(frame);
     for (;;) {
         pthread_mutex_lock(&mu);
         while (count == 0 && !eof) pthread_cond_wait(&cv, &mu);
@@ -171,7 +215,10 @@ int main(int argc, char **argv) {
         tail = (tail + 1) % RING;
         count--;
         pthread_mutex_unlock(&mu);
+        int same = prev && memcmp(prev, ring[slot], frame) == 0;
+        if (prev) memcpy(prev, ring[slot], frame);
         show(ring[slot]);
+        if (same) rep_same++;
         double t = now_s();
         if (last_shown && t - last_shown > max_gap) max_gap = t - last_shown;
         last_shown = t;
@@ -182,12 +229,17 @@ int main(int argc, char **argv) {
             unsigned long d = dropped; dropped = 0;
             pthread_mutex_unlock(&mu);
             rep_drop = d;
-            fprintf(stderr, "glass-fb: %.1f frames/s shown, %lu dropped, %lu late slots, longest gap %.0f ms, %d queued\n",
-                    rep_frames / 5.0, rep_drop, rep_late, max_gap * 1000, count);
-            rep_frames = 0; rep_late = 0; max_gap = 0; report = t + 5;
+            fprintf(stderr, "glass-fb: %.1f frames/s shown, %.1f/s new (the rest repeats of the previous picture), %lu dropped, %lu late slots, longest gap %.0f ms, %d queued\n",
+                    rep_frames / 5.0, (rep_frames - rep_same) / 5.0, rep_drop, rep_late, max_gap * 1000, count);
+            rep_frames = 0; rep_late = 0; rep_same = 0; max_gap = 0; report = t + 5;
         }
     }
     fprintf(stderr, "glass-fb: %lu frames, %lu late slots\n", frames, late);
+    if (dispc && shown != 0) {   /* leave the console's page on screen */
+        dispc[DISPC_GFX_BA0 / 4] = (uint32_t) smem;
+        dispc[DISPC_GFX_BA1 / 4] = (uint32_t) smem;
+        dispc[DISPC_CONTROL2 / 4] |= DISPC_GO_LCD2;
+    }
     munmap(mem, page * pages);
     close(fb);
     return 0;
