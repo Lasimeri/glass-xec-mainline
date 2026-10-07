@@ -28,6 +28,17 @@ out=${1:-}
 fps=${2:-24}
 bitrate=${BITRATE:-1500}
 bitrate=${bitrate%k}
+# BUFFER_MS: a jitter buffer on the Glass for a link that jitters (Wi-Fi):
+# the decoder takes that much lead at the start and then paces display by
+# the stream's own timestamps, so a frame that arrives late by less than the
+# lead still shows on time. 0 (the cable's default) draws on arrival; one
+# frame (42 at 24 frames/s) is the setting for the air; 1 would absorb
+# nothing, the frames being 42 ms apart.
+buffer_ms=${BUFFER_MS:-0}
+pace=()
+if [ "$buffer_ms" -gt 0 ] 2> /dev/null; then
+    pace=(-re -readrate_initial_burst "$(awk -v m="$buffer_ms" 'BEGIN { printf "%.3f", m / 1000 }')")
+fi
 desk=${DESK:-$HOME/deskpilot/target/release/desk}
 [ -x "$desk" ] || { echo "glass-view: no desk tool at $desk (DESK=...; cargo build --release in ~/deskpilot)" >&2; exit 1; }
 command -v gst-launch-1.0 > /dev/null || { echo "glass-view: gst-launch-1.0 is not installed (gstreamer, gst-plugin-pipewire, gst-plugins-bad for nvcodec)" >&2; exit 1; }
@@ -59,7 +70,7 @@ glass_ffmpeg || exit 1
 # drawing, decodes on one thread (frame threads delay output by one frame
 # each; one Cortex-A9 decodes this size at over 30 frames/s) and draws each
 # frame as it arrives. Expected glass-to-glass: about a tenth of a second.
-echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, up to $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
+echo "glass-view: $out -> portal screencast, GPU scale ${W}x${H}, NVENC H.264 ${bitrate} kbit/s, up to $fps frames/s -> Glass over ssh, jitter buffer ${buffer_ms} ms; Ctrl-C stops" >&2
 echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
 "$desk" cast -- gst-launch-1.0 -q \
     pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true ! "video/x-raw" \
@@ -67,4 +78,4 @@ echo "glass-view: the first run asks in the portal's dialog which monitor to sha
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
     ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" gop-size="$fps" zerolatency=true bframes=0 \
     ! h264parse ! mpegtsmux ! fdsink fd=1 sync=false \
-    | "$top/scripts/glass" ssh "/tmp/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"
+    | "$top/scripts/glass" ssh "/tmp/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"

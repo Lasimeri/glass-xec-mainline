@@ -1,33 +1,93 @@
 #!/bin/sh
-# glass-wifi: the BCM4330 (brcmfmac, 2.4 GHz b/g/n).
-#   glass-wifi add SSID PASSPHRASE   store a WPA2 network
-#   glass-wifi up | down | scan | status
+# glass-wifi: the BCM4330 (2.4 GHz b/g/n): brcmfmac on the mainline kernel,
+# Google's bcmdhd on the stock kernel (its firmware from /lib/firmware/glass).
+#   glass-wifi add SSID [PASSPHRASE]  store a WPA2 network. Without the
+#                                     passphrase it is asked for, echo off:
+#                                     it goes into no history and no log,
+#                                     and only the derived 256-bit key is
+#                                     kept (/etc/wpa_supplicant, root only)
+#   glass-wifi forget SSID            drop a stored network
+#   glass-wifi up | down | scan | status | list
 c=/etc/wpa_supplicant/wpa_supplicant.conf
+die() { echo "glass-wifi: $*" >&2; exit 1; }
+
+# Google's driver reads its firmware and calibration from paths given as
+# module parameters (empty: its compiled-in Android paths).
+radio() {
+    if [ -d /sys/module/bcmdhd ]; then
+        f=/lib/firmware/glass
+        [ -f $f/fw_bcmdhd.bin ] || die "no $f/fw_bcmdhd.bin (Google's Wi-Fi firmware, from the XE24 system image)"
+        [ -f $f/bcmdhd.cal ] || die "no $f/bcmdhd.cal"
+        echo $f/fw_bcmdhd.bin > /sys/module/bcmdhd/parameters/firmware_path
+        echo $f/bcmdhd.cal > /sys/module/bcmdhd/parameters/nvram_path
+    fi
+    ip link set wlan0 up || die "wlan0 did not come up (dmesg | grep -i -e dhd -e brcmf)"
+}
+conf() {
+    mkdir -p /etc/wpa_supplicant
+    [ -f "$c" ] || printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' > "$c"
+    chmod 600 "$c"
+}
+supplicant() {
+    conf
+    [ -S /run/wpa_supplicant/wlan0 ] && return 0
+    radio
+    wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid || die "wpa_supplicant did not start"
+}
+
 case "${1:-}" in
     add)
-        [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "glass-wifi add SSID PASSPHRASE" >&2; exit 1; }
-        mkdir -p /etc/wpa_supplicant
-        [ -f "$c" ] || printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' > "$c"
-        wpa_passphrase "$2" "$3" | grep -v '#psk=' >> "$c"
-        chmod 600 "$c"
+        ssid=${2:-}
+        [ -n "$ssid" ] || die "glass-wifi add SSID [PASSPHRASE]"
+        pass=${3:-}
+        if [ -z "$pass" ]; then
+            printf 'passphrase for %s (not shown): ' "$ssid" >&2
+            stty -echo 2> /dev/null
+            read -r pass
+            stty echo 2> /dev/null
+            echo >&2
+        fi
+        [ ${#pass} -ge 8 ] && [ ${#pass} -le 63 ] || die "a WPA2 passphrase is 8 to 63 characters"
+        conf
+        # wpa_passphrase reads the passphrase from stdin (never an argument:
+        # arguments show in ps) and prints the network block with the
+        # derived key; the commented plain line is dropped.
+        block=$(printf '%s\n' "$pass" | wpa_passphrase "$ssid" | grep -v '#psk=') || die "wpa_passphrase failed"
+        pass=
+        printf '%s\n' "$block" >> "$c"
+        echo "glass-wifi: $ssid stored (derived key only); glass-wifi up"
+        [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 reconfigure > /dev/null
+        ;;
+    forget)
+        [ -n "${2:-}" ] || die "glass-wifi forget SSID"
+        [ -f "$c" ] || exit 0
+        awk -v s="$2" '
+            /^network=\{/ { blk = $0; inb = 1; keep = 1; next }
+            inb { blk = blk "\n" $0; if ($0 ~ "^[ \t]*ssid=\"" s "\"") keep = 0; if ($0 ~ /^\}/) { inb = 0; if (keep) print blk }; next }
+            { print }' "$c" > "$c.new" && mv "$c.new" "$c" && chmod 600 "$c"
+        [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 reconfigure > /dev/null
         ;;
     up)
-        ip link set wlan0 up || exit 1
-        wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid
-        udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid
+        supplicant
+        udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -t 10 -T 3 || die "no DHCP lease"
         ;;
     down)
-        [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)"
-        [ -f /run/wpa_supplicant.pid ] && kill "$(cat /run/wpa_supplicant.pid)"
+        [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null
+        [ -f /run/wpa_supplicant.pid ] && kill "$(cat /run/wpa_supplicant.pid)" 2> /dev/null
         ip link set wlan0 down
         ;;
     scan)
-        ip link set wlan0 up
-        iw dev wlan0 scan | grep -E '^BSS|SSID:|signal:'
+        supplicant
+        wpa_cli -i wlan0 scan > /dev/null
+        sleep 4
+        wpa_cli -i wlan0 scan_results
         ;;
     status)
-        iw dev wlan0 link
-        ip addr show wlan0
+        [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 status | grep -E '^(ssid|bssid|freq|key_mgmt|wpa_state|ip_address)='
+        ip -4 addr show wlan0 2> /dev/null | grep inet
         ;;
-    *) echo "glass-wifi add SSID PASS | up | down | scan | status" >&2; exit 1 ;;
+    list)
+        [ -f "$c" ] && grep -E '^\s*ssid=' "$c" | sed 's/^\s*ssid=//'
+        ;;
+    *) echo "glass-wifi add SSID [PASSPHRASE] | forget SSID | up | down | scan | status | list" >&2; exit 1 ;;
 esac
