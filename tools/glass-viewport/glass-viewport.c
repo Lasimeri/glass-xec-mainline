@@ -29,7 +29,9 @@
 #include <string.h>
 
 static GstElement *pipeline, *vp;
-static int outw, outh, ox, oy, W, H;
+static int outw, outh, ox, oy, W, H;   /* W,H: the region of the monitor shown; the Glass is 640x360 */
+#define GW 640
+#define GH 360
 static int vx = 0, vy = 0;
 
 static void place(int cx, int cy) {
@@ -85,14 +87,15 @@ int main(int argc, char **argv) {
 
     char desc[2048];
     snprintf(desc, sizeof desc,
-        "pipewiresrc fd=%s path=%s do-timestamp=true keepalive-time=%d ! video/x-raw "
+        "pipewiresrc fd=%s path=%s do-timestamp=true keepalive-time=%d ! video/x-raw,max-framerate=%d/1 "
+        "! videorate drop-only=true max-rate=%d "
         "! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream "
         "! cudaupload ! cudacompositor name=vp latency=0 sink_0::xpos=%d sink_0::ypos=%d sink_0::width=%d sink_0::height=%d "
         "! video/x-raw(memory:CUDAMemory),width=%d,height=%d,framerate=%d/1 "
         "! cudaconvertscale ! video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12 "
         "! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d vbv-buffer-size=%d gop-size=%d zerolatency=true bframes=0 rc-lookahead=0 "
         "! h264parse ! %s ! fdsink fd=1 sync=false",
-        fd, node, 1000 / fps, -vx, -vy, outw, outh, W, H, fps, W, H, kbit, kbit / fps, fps, mux);
+        fd, node, 1000 / fps, fps, fps, -vx, -vy, outw, outh, W, H, fps, GW, GH, kbit, kbit / fps, fps, mux);
     GError *err = NULL;
     pipeline = gst_parse_launch(desc, &err);
     if (!pipeline || err) { fprintf(stderr, "glass-viewport: %s\n", err ? err->message : "no pipeline"); return 1; }
@@ -104,7 +107,7 @@ int main(int argc, char **argv) {
     pthread_detach(t);
 
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    fprintf(stderr, "glass-viewport: %dx%d of %dx%d, following the pointer, %d frames/s, %d kbit/s, %s\n", W, H, outw, outh, fps, kbit, mk ? "matroska" : "mpeg-ts");
+    fprintf(stderr, "glass-viewport: %dx%d of %dx%d shown at %dx%d, following the pointer, %d frames/s, %d kbit/s, %s\n", W, H, outw, outh, GW, GH, fps, kbit, mk ? "matroska" : "mpeg-ts");
     GstBus *bus = gst_element_get_bus(pipeline);
     GstMessage *msg = gst_bus_timed_pop_filtered(bus, GST_CLOCK_TIME_NONE, GST_MESSAGE_ERROR | GST_MESSAGE_EOS);
     int rc = 0;

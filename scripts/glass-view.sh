@@ -130,8 +130,12 @@ if [ "$out" = follow ]; then
     "$desk" cursor > "$fifo" &
     cur=$!
     trap 'kill $cur 2> /dev/null; rm -f "$fifo"' EXIT
-    echo "glass-view: $out -> a ${W}x${H} window following the pointer, pixel for pixel, NVENC H.264 ${bitrate} kbit/s, $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
-    "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$W" "$H" "$fps" "$bitrate" "$fifo" \
+    # VIEW=WxH: the region of the monitor shown (default 640x360: one pixel to
+    # one pixel; 1280x720: a 720p area at an exact 2:1).
+    view=${VIEW:-${W}x${H}}
+    vw=${view%x*}; vh=${view#*x}
+    echo "glass-view: $out -> a ${vw}x${vh} window following the pointer, shown at ${W}x${H} ($((vw / W)):1), NVENC H.264 ${bitrate} kbit/s, $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
+    "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$vw" "$vh" "$fps" "$bitrate" "$fifo" \
         | "$top/scripts/glass" ssh "$sink"
     exit
 fi
@@ -155,7 +159,8 @@ else
     echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
 fi
 "$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
-    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw" \
+    pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true "${keep[@]}" ! "video/x-raw,max-framerate=$fps/1" \
+    ! videorate drop-only=true max-rate="$fps" \
     ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
     "${rate[@]}" \
     ! cudaupload ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
