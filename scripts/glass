@@ -29,7 +29,9 @@
 #                               cache and userdata wiped
 #   glass restore-partition DIR NAME
 #                               one partition back from a backup directory
-#   glass ssh [CMD...]          root@172.16.42.1
+#   glass ssh [CMD...]          root on the Glass (GLASS_IP, the name glass, the
+#                               last Wi-Fi address, or USB 172.16.42.1)
+#   glass ip                    the Glass's Wi-Fi address, remembered for next time
 #   glass collect               glass-collect on the Glass into out/collect-DATE.tar
 #   glass serial                the USB serial console (/dev/ttyACM*)
 # Every write says what it will do and asks for a typed "yes" (or --yes).
@@ -42,10 +44,15 @@ cd "$top"
 
 # The Glass's address: GLASS_IP; else the name "glass" when the router
 # resolves it (the Glass announces that name with its DHCP lease); else the
-# USB link's fixed address.
+# last Wi-Fi address seen (out/glass-ip, written by glass-wifi-copy and by
+# `glass ip`), if it answers a ping; else the USB link's fixed address.
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
     GLASS_IP=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
+    if [ -z "$GLASS_IP" ] && [ -s out/glass-ip ]; then
+        last=$(head -n 1 out/glass-ip)
+        ping -c 1 -W 1 "$last" > /dev/null 2>&1 && GLASS_IP=$last
+    fi
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
 ALLOW=(boot recovery system cache userdata)
@@ -440,6 +447,16 @@ case "$verb" in
         ;;
 
     ssh) ssh_glass "$@" ;;
+
+    # The Glass's Wi-Fi address, asked over whatever link works, remembered
+    # in out/glass-ip for the next run.
+    ip)
+        a=$(ssh_glass "ip -4 addr show wlan0 2> /dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p'" < /dev/null | tr -d '\r' | head -n 1)
+        [ -n "$a" ] || die "the Glass has no Wi-Fi address (glass ssh glass-wifi status)"
+        mkdir -p out
+        echo "$a" > out/glass-ip
+        echo "$a"
+        ;;
 
     collect)
         mkdir -p out

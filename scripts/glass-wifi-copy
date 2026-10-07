@@ -92,7 +92,14 @@ done
 [ $copied -gt 0 ] || { echo "glass-wifi-copy: nothing copied" >&2; exit 1; }
 
 echo "glass-wifi-copy: joining"
-glass "glass-wifi up > /dev/null 2>&1; sleep 2; glass-wifi status" | grep -E "^(ssid|wpa_state)=|inet " || {
+st=$(glass "glass-wifi up > /dev/null 2>&1; sleep 2; glass-wifi status" < /dev/null | tr -d '\r')
+echo "$st" | grep -E "^(ssid|wpa_state)=|inet " || {
     echo "glass-wifi-copy: the Glass did not join; on it: glass-wifi status, dmesg | grep -i dhd" >&2
     exit 1
 }
+a=$(echo "$st" | sed -n 's/^ip_address=//p' | head -n 1)
+if [ -n "$a" ]; then
+    mkdir -p "$top/out"
+    echo "$a" > "$top/out/glass-ip"
+    echo "glass-wifi-copy: the Glass is at $a (remembered in out/glass-ip; scripts/glass ssh uses it)"
+fi
