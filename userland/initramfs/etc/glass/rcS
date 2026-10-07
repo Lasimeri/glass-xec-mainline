@@ -20,6 +20,12 @@ fi
 # postmarketOS google-glass port's initfs hook).
 p=/sys/devices/platform/omapdss/manager2/panel-notle-dpi
 if [ -d "$p" ]; then
+    # Off first: after the bootloader's handoff the display is already
+    # active and the driver's power-on takes its skip_init shortcut, which
+    # never switches the LED illumination on (seen 2026-10-07: enabled
+    # stayed 0, the panel dark). A full off-then-on runs the whole sequence.
+    echo 0 > "$p/enabled"
+    sleep 1
     echo 1 > "$p/enabled"
     echo 160 > "$p/brightness"
     echo 0 > /sys/devices/platform/omapfb/graphics/fb0/blank

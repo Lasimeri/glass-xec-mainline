@@ -130,6 +130,13 @@ scripts/glass flash-recovery full
 - **`flash:raw`:** recent platform-tools (the desktop has 37.0.0) ask the bootloader for the partition size before writing a boot image and fail on Glass's empty answer ("Couldn't parse partition size '0x'"). The CLI then repeats the write as `fastboot flash:raw`, which owners confirm works on XE24.
 - **Booting Linux:** `adb reboot recovery` from Android, `fastboot reboot recovery` (bootloader support **unverified**), or the recovery button combination of step 2.
 
+## 9b. The desktop's monitor on the glasses
+```sh
+scripts/glass-view.sh              # the primary monitor, 30 frames/s asked; Ctrl-C stops
+scripts/glass-view.sh DP-2 30      # another output
+```
+Works on the stock-kernel image (step 6) today. The desktop captures, scales on the GPU and encodes H.264 with NVENC; the stream rides the ssh session; the Glass decodes it with a static ffmpeg pushed into its RAM and writes `/dev/fb0`. Kernel capture (30 frames/s) needs a private ffmpeg copy with `cap_sys_admin` (the script's header says how); without it the compositor's screenshots give about 10 frames/s.
+
 ## 10. The desktop side of `glass-term`
 - **tmux:** Claude Code has to run inside tmux for the Glass to attach to the same session: `tmux new -A -s claude`, then `claude ...` inside it. Today `~/tts079/claude-voice.sh` starts it directly in Konsole; that has to change.
 - **sshd:** `sudo systemctl enable --now sshd`.
@@ -151,6 +158,15 @@ scripts/glass flash-recovery full
 scripts/glass restore          # Google's XE24 boot, recovery, system; cache erased, userdata wiped
 ```
 Or one partition from your backup: `scripts/glass restore-partition backup/DATE recovery`. `xloader`, `bootloader`, `fpga` and `efs` (per-device data: the stock fstab mounts it as `/bootconfig`) are never written by any verb.
+
+## What happened on the first hardware day (2026-10-07)
+The unit: XE21 (XRW66), 2 GB, bootloader 0.5, `getvar all` empty, no partition sizes from fastboot; the partition table from the device: boot and recovery 8 MiB each (`mmcblk0p7`, `p6`), system 1 GiB, cache 768 MiB, userdata 13.5 GB, plus xloader, bootloader, fpga, bootconfig, misc.
+- **Step 3:** unlock took one second.
+- **Step 4:** `fastboot boot` runs the sent kernel (the previous-boot log proved it) but Google's rooted ramdisk rebooted itself at 23 s; root adb never came. Root came instead from step 6 over ssh, and the backup was taken over ssh (`backup/20261007-014302`, every partition but userdata).
+- **Step 5:** the mainline safe image took over, brought no USB up and reset after about a minute, leaving no crash record. Unsolved; a serial cable or the display are the next instruments.
+- **Step 6:** the stock-kernel image worked at the first try: RNDIS in 15 s, ssh, `wlan0` found by the built-in bcmdhd. The panel stayed dark until `panel-notle-dpi/enabled` was written 0 then 1 (the driver skips the LED when the bootloader left the display active); `rcS` does that now.
+- **9b:** the desktop's monitor streamed to the glasses the same night (the user: "I can see everything on my desktop now").
+- **Not done, on purpose:** no partition was written. The next writes, each a decision together: `flash-rootfs` (Wi-Fi and `glass-term` need the rootfs), then `flash-recovery stock` so the Linux side survives a power cycle (6.6 MB fits the 8 MiB recovery).
 
 ## What is known about bricking (from owners' reports, 2013 to 2022)
 - **The one documented brick:** flashing an XE9-or-earlier image onto a unit running XE10 or later (Google's warning). `scripts/fetch.sh` downloads only XE24 and XE22 images; `glass restore` flashes only XE24.
