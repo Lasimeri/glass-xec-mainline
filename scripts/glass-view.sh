@@ -29,8 +29,10 @@ fps=${2:-24}
 # One address for every connection of this stream (glass addr: home Wi-Fi,
 # USB or the tailnet), and the mode it means: over the tailnet (the phone's
 # hotspot, away) the link is a cellular one through WireGuard, so the video
-# goes at 1200 kbit/s (not 3000) and the Glass holds four frames (267 ms at
-# 15/s) against the link's jitter (the user, 2026-10-07).
+# goes at 2000 kbit/s and 12 frames a second (the user's choice, 2026-10-07;
+# 3000 and the requested rate at home), and the Glass holds about 250 ms of
+# frames (3 at 12/s) against the link's jitter; REMOTE_FPS, BITRATE and
+# CUSHION change them.
 if [ -z "${GLASS_IP:-}" ]; then
     GLASS_IP=$("$top/scripts/glass" addr 2> /dev/null || true)
 fi
@@ -38,8 +40,9 @@ export GLASS_IP
 remote=0
 case "$GLASS_IP" in 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) remote=1 ;; esac
 if [ $remote = 1 ]; then
-    bitrate=${BITRATE:-1200}
-    echo "glass-view: the Glass is reached over the tailnet ($GLASS_IP): $bitrate kbit/s, a deeper cushion" >&2
+    fps=${REMOTE_FPS:-12}
+    bitrate=${BITRATE:-2000}
+    echo "glass-view: the Glass is reached over the tailnet ($GLASS_IP): $fps frames/s at $bitrate kbit/s, a deeper cushion" >&2
 else
     bitrate=${BITRATE:-3000}
 fi
@@ -124,8 +127,10 @@ done
 # cushion fixes; the user chose 15 a second instead (2026-10-07), one
 # frame then being 67 ms, and the picture landing near the 150 ms the
 # Glass holds the sound back (glass-audio delay).
-# Over the tailnet four frames (CUSHION to change it; glass-fb holds up to 6).
-if [ $remote = 1 ]; then cushion=${CUSHION:-4}; else cushion=${CUSHION:-1}; fi
+# Over the tailnet about 250 ms of frames, 3 at 12/s (CUSHION to change it;
+# glass-fb holds up to 6).
+if [ $remote = 1 ]; then cushion=${CUSHION:-$(( (fps * 250 + 500) / 1000 ))}; else cushion=${CUSHION:-1}; fi
+[ "$cushion" -ge 1 ] || cushion=1
 # One stream at a time on the Glass: a session whose network went away (the
 # Glass moved between home and the hotspot) leaves its decoder blocked on a
 # dead connection, deaf to SIGTERM; it goes first, by force if it must.
