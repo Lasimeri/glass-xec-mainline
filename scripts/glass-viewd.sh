@@ -47,5 +47,5 @@ while :; do
         # back (it also does on SIGTERM).
         "$top/scripts/glass" ssh 'for p in $(pidof ffmpeg); do kill $p; done; sleep 1; for p in $(pidof glass-fb); do kill $p; done; true' < /dev/null > /dev/null 2>&1
     fi
-    sleep 5
+    sleep 2
 done

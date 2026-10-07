@@ -78,12 +78,17 @@ save_state() {
     echo "$v $mu" > "$state_file.new" && mv "$state_file.new" "$state_file"
 }
 save_state
+# In its own process group (set -m), so that the stop ends it whole, and
+# without the lock (9>&-): a watcher left behind kept the lock and the next
+# start refused (2026-10-07).
+set -m
 (
     id=$(pactl list short sinks | awk -v n="$sink" '$2 == n { print $1; exit }')
     pactl subscribe 2> /dev/null | while read -r ev; do
         case "$ev" in *"'change' on sink #$id") save_state ;; esac
     done
-) &
+) 9>&- &
+set +m
 
 # The desktop's volume control for the Glass: the slider and mute of the
 # "Google Glass" output go to glass-audio control on the Glass, once at the
@@ -105,20 +110,53 @@ volume_link() {   # ADDRESS
 
 prev=""
 # Streams that follow the default: those of applications (a client) playing
-# on FROM, moved to TO. Streams of modules (no client: the voice setup's
-# echo canceller, loopbacks) are routed on purpose and never moved; moving
-# every stream put the echo canceller's output on the Glass (2026-10-07).
+# on FROM, moved to TO, and the voice (079's speech: the echo canceller's
+# playback, node echo-cancel-playback), which comes out of the Glass too
+# (the user, 2026-10-07: "make it come out of my glasses all the time and
+# mute the main stereo"; the Schiit stays muted, the headset untouched).
+# Other streams of modules (the microphone loopbacks into mix_mic) are
+# routed on purpose and never moved.
+voice_on() {   # SINK_ID: the voice's stream when it plays there
+    pactl list sink-inputs 2> /dev/null | awk -v f="$1" '
+        /^Sink Input #/ { id = substr($3, 2); s = "" }
+        /^[ \t]+Sink: / { s = $2 }
+        /node\.name = "echo-cancel-playback"/ { if (s == f) print id }'
+}
 move_streams() {   # FROM TO
     local from
     from=$(pactl list short sinks | awk -v n="$1" '$2 == n { print $1; exit }')
     [ -n "$from" ] || return 0
-    for s in $(pactl list short sink-inputs | awk -v f="$from" '$2 == f && $3 != "-" { print $1 }'); do
+    for s in $(pactl list short sink-inputs | awk -v f="$from" '$2 == f && $3 != "-" { print $1 }') $(voice_on "$from"); do
         pactl move-sink-input "$s" "$2" 2> /dev/null
     done
+}
+# Streams of modules that name their output (target.object: the loopbacks
+# into mix_mic) put back there whatever the default is: WirePlumber moves
+# such streams with the default. The voice is not one of them (it goes with
+# the Glass, move_streams). Run after each change of default, and again 2 s
+# later (WirePlumber moves late).
+pin_module_streams() {
+    local sinks
+    sinks=$(pactl list short sinks | awk '{ print $1, $2 }')
+    pactl list sink-inputs 2> /dev/null | awk '
+        function out() { if (id != "" && mod != "n/a" && tgt != "" && node != "echo-cancel-playback") print id, sink, tgt }
+        /^Sink Input #/ { out(); id = substr($3, 2); mod = ""; sink = ""; tgt = ""; node = "" }
+        /^[ \t]+Owner Module: / { mod = $3 }
+        /^[ \t]+Sink: / { sink = $2 }
+        /target\.object = / { tgt = $3; gsub(/"/, "", tgt) }
+        /node\.name = / { node = $3; gsub(/"/, "", node) }
+        END { out() }' |
+        while read -r id cur tgt; do
+            want=$(echo "$sinks" | awk -v n="$tgt" '$2 == n { print $1; exit }')
+            [ -n "$want" ] && [ "$want" != "$cur" ] || continue
+            pactl move-sink-input "$id" "$tgt" 2> /dev/null &&
+                echo "glass-audio: $(date +%T) stream $id back on its own output $tgt" >> "$log"
+        done
 }
 restore() {
     [ -n "$prev" ] || return 0
     pactl set-default-sink "$prev"
+    pin_module_streams
     move_streams "$sink" "$prev"
     echo "glass-audio: $(date +%T) back to $prev" >> "$log"
     prev=""
@@ -149,6 +187,8 @@ while :; do
         [ "$cur" = "$sink" ] && cur=$(real_output)
         prev=$cur
         pactl set-default-sink "$sink"
+        pin_module_streams
+        ( sleep 2; pin_module_streams ) 9>&- &
         move_streams "$prev" "$sink"
         # In the background with a wait: a stop signal then runs the trap at
         # once (bash defers traps until a foreground pipeline ends).
@@ -158,33 +198,33 @@ while :; do
                 # of 768 kbit/s of raw samples; the Glass decodes it and
                 # holds it by its remote delay (glass-audio delay remote).
                 echo "glass-audio: $(date +%T) to the Glass over the tailnet at $addr, Opus 48 kbit/s (was $prev)" >> "$log"
-                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" |
+                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" 9>&- |
                     ffmpeg -hide_banner -loglevel error -f s16le -ar $rate -ac 1 -i - -c:a libopus -b:a 48k \
-                        -application lowdelay -frame_duration 40 -f mpegts -muxdelay 0 -flush_packets 1 - 2>> "$log" |
-                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play opus" 2>> "$log" &
+                        -application lowdelay -frame_duration 40 -f mpegts -muxdelay 0 -flush_packets 1 - 2>> "$log" 9>&- |
+                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play opus" 2>> "$log" 9>&- &
                 ;;
             *)
                 echo "glass-audio: $(date +%T) to the Glass at $addr (was $prev)" >> "$log"
-                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" |
-                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play" 2>> "$log" &
+                parec -d "$sink.monitor" --format=s16le --rate=$rate --channels=1 --latency-msec=10 --raw 2>> "$log" 9>&- |
+                    GLASS_IP=$addr "$top/scripts/glass" ssh "glass-audio play" 2>> "$log" 9>&- &
                 ;;
         esac
         session=$!
         # The volume link beside the session, in its own process group (set
         # -m) so that it ends whole with the session.
         set -m
-        volume_link "$addr" &
+        volume_link "$addr" 9>&- &
         link=$!
         set +m
         # Ended when the Glass is on a better path or this one went away
         # (glass-pathguard.sh); the loop starts it again there, in that
         # path's mode (raw at home, Opus over the tailnet).
-        "$top/scripts/glass-pathguard.sh" "$addr" "$session" >> "$log" 2>&1 &
+        "$top/scripts/glass-pathguard.sh" "$addr" "$session" >> "$log" 2>&1 9>&- &
         guard=$!
         wait $session
         kill -- -"$link" 2> /dev/null
         kill $guard 2> /dev/null
         restore
     fi
-    sleep 5
+    sleep 2
 done

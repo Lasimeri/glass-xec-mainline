@@ -41,6 +41,6 @@ while :; do
     guard=$!
     wait $session
     kill $guard 2> /dev/null
-    echo "glass-tap: $(date +%T) session ended; again in 5 s" >> "$log"
-    sleep 5
+    echo "glass-tap: $(date +%T) session ended; again in 2 s" >> "$log"
+    sleep 2
 done

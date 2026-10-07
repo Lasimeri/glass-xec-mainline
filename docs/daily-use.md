@@ -20,7 +20,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | supervisor | what it does |
 | --- | --- |
 | `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 15 frames/s; restarts the stream when the Glass returns |
-| `glass-audio.sh` | makes the "Google Glass" sound output the default while the Glass is up (it moves application streams only; streams aimed at the default output, the voice setup's echo canceller among them, follow by PipeWire's own policy), 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet; the stereo comes back when it leaves |
+| `glass-audio.sh` | makes the "Google Glass" sound output the default while the Glass is up and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; the other module streams (the microphone loopbacks) stay where they are aimed. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The main stereo (Schiit) is kept muted and the headset left alone (the user's choice, 2026-10-07), so everything is heard on the Glass; when the Glass leaves, the default goes back to the (muted) stereo |
 | `glass-tap.sh` | a tap on the touchpad toggles the voice mute (`ptt079 --toggle`) |
 
 ## Reaching it
@@ -32,6 +32,8 @@ On the phone's hotspot the Glass is reached through the tailnet; nothing else on
 ## The camera
 
 `scripts/glass camera` opens the Glass's camera in its own window on the desktop: 960x540 (half the camera's 1920x1080 video size), 15 frames/s, H.264 at 768 kbit/s, no sound. Other values as `scripts/glass camera WxH FPS KBIT/S`. The work is done by the Ducati (the OMAP4's Cortex-M3 cores with Google's firmware): the OV5680 camera and the H.264 encoder there share the frames in place, the Glass's own CPU only passes on the stream. Closing the window stops the camera. On the Glass itself, `glass-camera -i` lists what the camera and the encoder offer; the protocol is in `docs/ducati-omx.md`.
+
+The USB cable is a charger and a fallback, never the working path: every session (stream, sound, volume link, tap, the camera window) is on home Wi-Fi whenever Wi-Fi answers. A session that fell back to the cable (Wi-Fi was down) moves to Wi-Fi by itself once Wi-Fi has answered steadily for 9 s, cable still in; and if the cable comes out while a session is on it, that session ends at once and starts again on Wi-Fi (or the tailnet) as soon as the Glass answers there. Pulling the cable therefore changes nothing in normal use. `scripts/glass unplug-test [ROUNDS] [HOLD_S]` proves it, repeatably, without touching the cable: it switches the Glass's USB off from the Glass's side (the desktop sees an unplug), once with everything on Wi-Fi and once with Wi-Fi down first so everything is on the cable, times each session's return to Wi-Fi, then switches USB back on and checks nothing moved back.
 
 `scripts/glass status` shows the whole state in one table: how the Glass is reachable, battery, board temperature, CPU clock, display and sound settings, what runs on it, the last stream report and the desktop's supervisors.
 

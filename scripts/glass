@@ -47,6 +47,10 @@
 #                               and times everything that comes back by
 #                               itself: ssh, Wi-Fi, clock, tailnet, display
 #                               shell, stream, sound, volume, tap
+#   glass unplug-test [N] [S]   the USB cable "unplugged" N times (default 1)
+#                               for S seconds (40) from the Glass's side, and
+#                               back: times every session's move to home
+#                               Wi-Fi, then checks they stay there
 #   glass addr                  the address the verbs would use now (Wi-Fi,
 #                               USB or tailnet)
 #   glass camera [WxH] [FPS] [KBIT/S]
@@ -70,6 +74,7 @@ cd "$top"
 # DHCP lease), each if it answers a ping; else the USB link if it answers;
 # else its tailnet address; else the Glass by its MAC on this subnet; else
 # USB.
+given_ip=${GLASS_IP:-}   # set by the caller: a fixed path (glass camera follows the Glass otherwise)
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
     # The remembered address first (on home Wi-Fi a fixed one, glass-wifi
@@ -609,7 +614,13 @@ case "$verb" in
 
     camera)
         # The Glass's camera in its own window here (scripts/glass-camera.sh).
-        GLASS_IP=$GLASS_IP exec scripts/glass-camera.sh "$@"
+        GLASS_IP=$given_ip exec scripts/glass-camera.sh "$@"
+        ;;
+
+    unplug-test)
+        # The USB cable unplugged from the Glass's side and back, timing
+        # every session's move to home Wi-Fi (scripts/glass-unplug-test.sh).
+        exec scripts/glass-unplug-test.sh "${1:-1}" "${2:-40}"
         ;;
 
     addr)
