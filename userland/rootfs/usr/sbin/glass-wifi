@@ -58,7 +58,7 @@ case "${1:-}" in
         "$0" forget "$ssid"   # stored again: the old block goes
         printf '%s\n' "$block" >> "$c"
         echo "glass-wifi: $ssid stored (derived key only); glass-wifi up"
-        [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 reconfigure > /dev/null
+        if [ -S /run/wpa_supplicant/wlan0 ]; then wpa_cli -i wlan0 reconfigure > /dev/null; fi
         ;;
     forget)
         [ -n "${2:-}" ] || die "glass-wifi forget SSID"
@@ -67,7 +67,7 @@ case "${1:-}" in
             /^network=\{/ { blk = $0; inb = 1; keep = 1; next }
             inb { blk = blk "\n" $0; if ($0 ~ "^[ \t]*ssid=\"" s "\"") keep = 0; if ($0 ~ /^\}/) { inb = 0; if (keep) print blk }; next }
             { print }' "$c" > "$c.new" && mv "$c.new" "$c" && chmod 600 "$c"
-        [ -S /run/wpa_supplicant/wlan0 ] && wpa_cli -i wlan0 reconfigure > /dev/null
+        if [ -S /run/wpa_supplicant/wlan0 ]; then wpa_cli -i wlan0 reconfigure > /dev/null; fi
         ;;
     up)
         supplicant
