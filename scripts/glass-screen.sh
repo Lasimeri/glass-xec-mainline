@@ -42,6 +42,8 @@ case "${1:-}" in
         kwriteconfig6 --file "$f" --group "$rule" --key sizerule 2
         kwriteconfig6 --file "$f" --group "$rule" --key noborder true
         kwriteconfig6 --file "$f" --group "$rule" --key noborderrule 2
+        kwriteconfig6 --file "$f" --group "$rule" --key above true
+        kwriteconfig6 --file "$f" --group "$rule" --key aboverule 2
         kwriteconfig6 --file "$f" --group "$rule" --key desktops "\\0"
         kwriteconfig6 --file "$f" --group "$rule" --key desktopsrule 2
         groups=$(kreadconfig6 --file "$f" --group General --key rules)
