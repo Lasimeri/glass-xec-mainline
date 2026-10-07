@@ -46,4 +46,16 @@ fi
 if grep -q '^network=' /etc/wpa_supplicant/wpa_supplicant.conf 2> /dev/null; then
     /usr/sbin/glass-wifi up > /dev/null 2>&1 &
 fi
+
+# Tailscale, when installed (apk add tailscale): the Glass on the user's
+# tailnet as "glass", reachable from the desktop on any network, the phone's
+# hotspot included (its NAT turns away connections from the home network).
+# The login is kept in /var/lib/tailscale; DNS is left alone (--accept-dns
+# false was given at the login). Log: /run/glass/tailscaled.log.
+if [ -x /usr/sbin/tailscaled ]; then
+    mkdir -p /var/lib/tailscale /run/tailscale
+    setsid /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state \
+        --socket=/run/tailscale/tailscaled.sock > /run/glass/tailscaled.log 2>&1 < /dev/null &
+    log "tailscaled started"
+fi
 exit 0

@@ -9,6 +9,11 @@
 #   glass-wifi forget SSID            drop a stored network
 #   glass-wifi priority SSID N        join it before networks with a lower N
 #                                     when several are in range (default 0)
+#   glass-wifi static SSID ADDR/LEN GATEWAY [DNS]
+#                                     a fixed address on that network, no
+#                                     DHCP there (home: 192.168.0.80/24, the
+#                                     user's choice 2026-10-07); SSID off
+#                                     for DHCP again; alone, the list
 #   glass-wifi up | down | scan | status | list
 c=/etc/wpa_supplicant/wpa_supplicant.conf
 die() { echo "glass-wifi: $*" >&2; exit 1; }
@@ -38,6 +43,37 @@ supplicant() {
     [ -S /run/wpa_supplicant/wlan0 ] && return 0
     radio
     wpa_supplicant -B -i wlan0 -c "$c" -P /run/wpa_supplicant.pid || die "wpa_supplicant did not start"
+}
+
+# Fixed addresses by network (glass-wifi static), a line each: SSID, ADDR/LEN,
+# gateway, DNS, tab-separated (SSIDs may hold spaces).
+st=/etc/glass/wifi-static
+dhcp_running() { [ -f /run/udhcpc.wlan0.pid ] && kill -0 "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null; }
+# The address for the network just joined (SSID, 1 if it is another network
+# than before): the fixed one listed for it, DHCP stopped; else DHCP, started
+# if it is not running (the router learns the name "glass"), or a new lease
+# asked for when the network changed (USR2 releases, USR1 starts again).
+address() {
+    set -- "$1" "$2" $( [ -f "$st" ] && awk -F '\t' -v s="$1" '$1 == s { print $2, $3, $4; exit }' "$st" )
+    if [ -n "${3:-}" ]; then
+        if dhcp_running; then kill "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null; fi
+        rm -f /run/udhcpc.wlan0.pid
+        if ! ip -4 addr show wlan0 | grep -q "inet $3 "; then
+            ip -4 addr flush dev wlan0
+            ip addr add "$3" brd + dev wlan0
+        fi
+        ip route replace default via "$4" dev wlan0
+        echo "nameserver ${5:-$4}" > /etc/resolv.conf
+        echo "glass-wifi: $(date +%T) on $1 at $3 (fixed)" >> /run/glass/rcS.log
+    elif ! dhcp_running; then
+        ip -4 addr flush dev wlan0   # a fixed address from another network goes
+        udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 > /dev/null 2>&1
+        echo "glass-wifi: $(date +%T) on $1, address by DHCP" >> /run/glass/rcS.log
+    elif [ "$2" = 1 ]; then
+        p=$(cat /run/udhcpc.wlan0.pid)
+        kill -USR2 "$p" 2> /dev/null; sleep 1; kill -USR1 "$p" 2> /dev/null
+        echo "glass-wifi: $(date +%T) on $1 (another network): new DHCP lease asked for" >> /run/glass/rcS.log
+    fi
 }
 
 case "${1:-}" in
@@ -97,17 +133,60 @@ case "${1:-}" in
         # each beacon and TCP stalls on them (the stream showed one frame
         # every two seconds, 2026-10-07); the cost is some battery.
         iw dev wlan0 set power_save off 2> /dev/null
-        # Backgrounds and keeps asking when the lease is slow (an access
-        # point not yet up at boot); the router learns the name "glass".
-        # One client only: up runs again after a network is added.
-        if ! { [ -f /run/udhcpc.wlan0.pid ] && kill -0 "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null; }; then
-            udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 || die "udhcpc did not start"
-        fi
         # The clock: no battery-backed time survives a power-off here, and
         # TLS (apk's mirrors) refuses a date in 2000; once joined, set it.
         (sleep 5; ntpd -n -q -p pool.ntp.org > /dev/null 2>&1) &
+        # The address follows the network joined: wpa_cli runs this script
+        # on each connection (the wlan0 case below), which sets the fixed
+        # address of a network listed with glass-wifi static, or asks DHCP
+        # (a new lease at once when the network changed: udhcpc alone kept
+        # the hotspot's address on the home network until its lease ran
+        # out, 2026-10-07).
+        if ! { [ -f /run/wpa_cli.pid ] && kill -0 "$(cat /run/wpa_cli.pid)" 2> /dev/null; }; then
+            wpa_cli -i wlan0 -a "$0" -B -P /run/wpa_cli.pid > /dev/null 2>&1
+        fi
+        # Already joined (up run again, or joined before wpa_cli listened):
+        # no event comes for it, so the address is set here.
+        if wpa_cli -i wlan0 status 2> /dev/null | grep -q '^wpa_state=COMPLETED'; then
+            "$0" wlan0 CONNECTED
+        fi
+        ;;
+    wlan[0-9]*)
+        # wpa_cli -a: "glass-wifi wlan0 CONNECTED|DISCONNECTED".
+        [ "${2:-}" = CONNECTED ] || exit 0
+        mkdir -p /run/glass
+        ssid=$(wpa_cli -i "$1" status 2> /dev/null | sed -n 's/^ssid=//p')
+        last=$(cat /run/glass/wifi-ssid 2> /dev/null || true)
+        printf '%s\n' "$ssid" > /run/glass/wifi-ssid
+        changed=0
+        [ -n "$last" ] && [ "$ssid" != "$last" ] && changed=1
+        address "$ssid" "$changed"
+        ;;
+    static)
+        # glass-wifi static                       the list
+        # glass-wifi static SSID ADDR/LEN GW [DNS] a fixed address there
+        # glass-wifi static SSID off               DHCP there again
+        mkdir -p /etc/glass
+        if [ -z "${2:-}" ]; then
+            [ -f "$st" ] && tr '\t' ' ' < "$st"
+            exit 0
+        fi
+        ssid=$2
+        if [ "${3:-}" = off ]; then
+            [ -f "$st" ] && awk -F '\t' -v s="$ssid" '$1 != s' "$st" > "$st.new" && mv "$st.new" "$st"
+            echo "glass-wifi: $ssid by DHCP"
+        else
+            a=${3:-}; g=${4:-}; d=${5:-${4:-}}
+            echo "$a" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || die "glass-wifi static SSID ADDR/LEN GATEWAY [DNS] (e.g. 192.168.0.80/24 192.168.0.1)"
+            echo "$g" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || die "the gateway is an address, e.g. 192.168.0.1"
+            { [ -f "$st" ] && awk -F '\t' -v s="$ssid" '$1 != s' "$st"; printf '%s\t%s\t%s\t%s\n' "$ssid" "$a" "$g" "$d"; } > "$st.new" && mv "$st.new" "$st"
+            echo "glass-wifi: $ssid at $a (gateway $g, DNS $d)"
+        fi
+        # Joined to that network now: the change applies at once.
+        if [ "$(cat /run/glass/wifi-ssid 2> /dev/null)" = "$ssid" ]; then address "$ssid" 0; fi
         ;;
     down)
+        [ -f /run/wpa_cli.pid ] && kill "$(cat /run/wpa_cli.pid)" 2> /dev/null
         [ -f /run/udhcpc.wlan0.pid ] && kill "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null
         [ -f /run/wpa_supplicant.pid ] && kill "$(cat /run/wpa_supplicant.pid)" 2> /dev/null
         ip link set wlan0 down
@@ -125,5 +204,5 @@ case "${1:-}" in
     list)
         [ -f "$c" ] && grep -E '^\s*ssid=' "$c" | sed 's/^\s*ssid=//'
         ;;
-    *) echo "glass-wifi add SSID [PASSPHRASE] | forget SSID | up | down | scan | status | list" >&2; exit 1 ;;
+    *) echo "glass-wifi add SSID [PASSPHRASE] | forget SSID | priority SSID N | static [SSID ADDR/LEN GATEWAY [DNS] | SSID off] | up | down | scan | status | list" >&2; exit 1 ;;
 esac

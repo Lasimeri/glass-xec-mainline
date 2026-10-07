@@ -18,16 +18,22 @@
  * The font is a PC Screen Font (PSF1 or PSF2, its Unicode table honoured
  * for Latin-1), drawn SCALE times (default 2: 8x16 glyphs as 16x32 cells,
  * 40 columns by 11 rows on 640x360). Light grey on black; black is clear
- * on the prism.
+ * on the prism. The last two rows are status lines in blue, refreshed
+ * every 5 s: the Wi-Fi network and address, the tailnet address and the
+ * battery (a + while charging); the shell has the nine rows above.
  *
  * Cost: it sleeps in poll(); the cursor blinks twice a second (one cell
- * redrawn). Started by init through /etc/glass/console display, which
+ * redrawn); the status lines are read every 5 s and redrawn only when they
+ * change. Started by init through /etc/glass/console display, which
  * starts it again when it ends. Compiled on the Glass (gcc from Alpine).
  */
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <linux/fb.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -57,7 +63,7 @@ static unsigned short gmap[256];
 
 static uint32_t *fbm;
 static unsigned stride, xres, yres;
-static unsigned scale = 2, cw, ch, cols, rows, x0, y0;
+static unsigned scale = 2, cw, ch, cols, rows, trows, x0, y0;   /* rows: the shell's; trows: all */
 static unsigned char *text;
 static unsigned cx, cy;
 static int cursor_drawn;
@@ -120,8 +126,7 @@ static int load_font(const char *path) {
     return 0;
 }
 
-static void draw_cell(unsigned col, unsigned row, int inverse) {
-    unsigned char c = text[row * cols + col];
+static void draw_glyph(unsigned col, unsigned row, unsigned char c, uint32_t on, uint32_t off) {
     const unsigned char *g = font + (size_t) gmap[c] * gbytes;
     uint32_t *base = fbm + (size_t) (y0 + row * ch) * stride + x0 + col * cw;
     for (unsigned y = 0; y < fh; y++) {
@@ -129,10 +134,56 @@ static void draw_cell(unsigned col, unsigned row, int inverse) {
         for (unsigned s = 0; s < scale; s++) {
             uint32_t *o = base + (size_t) (y * scale + s) * stride;
             for (unsigned x = 0; x < fw; x++) {
-                uint32_t v = ((bits[x >> 3] >> (7 - (x & 7))) & 1) ^ inverse ? fg : bg;
+                uint32_t v = (bits[x >> 3] >> (7 - (x & 7))) & 1 ? on : off;
                 for (unsigned t = 0; t < scale; t++) *o++ = v;
             }
         }
+    }
+}
+
+static void draw_cell(unsigned col, unsigned row, int inverse) {
+    draw_glyph(col, row, text[row * cols + col], inverse ? bg : fg, inverse ? fg : bg);
+}
+
+/* The two status lines under the shell, every 5 s: the network and the
+ * Wi-Fi address (/run/glass/wifi-ssid, written by glass-wifi), the tailnet
+ * address and the battery. Redrawn only when they change. */
+static const uint32_t stc = 0xff6fb3d9;   /* a muted blue, apart from the shell's grey */
+static char shown_st[2][128];
+static void if_addr(const char *name, char *out, size_t n) {
+    struct ifaddrs *ifs, *i;
+    snprintf(out, n, "-");
+    if (getifaddrs(&ifs)) return;
+    for (i = ifs; i; i = i->ifa_next)
+        if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strcmp(i->ifa_name, name)) {
+            inet_ntop(AF_INET, &((struct sockaddr_in *) i->ifa_addr)->sin_addr, out, n);
+            break;
+        }
+    freeifaddrs(ifs);
+}
+static void read_line(const char *path, char *out, size_t n, const char *fallback) {
+    FILE *f = fopen(path, "r");
+    out[0] = 0;
+    if (f) { if (!fgets(out, (int) n, f)) out[0] = 0; fclose(f); }
+    out[strcspn(out, "\n")] = 0;
+    if (!out[0]) snprintf(out, n, "%s", fallback);
+}
+static void status_lines(void) {
+    char ssid[64], wip[24], tip[24], cap[8], chg[24], line[2][128];
+    if_addr("wlan0", wip, sizeof wip);
+    if_addr("tailscale0", tip, sizeof tip);
+    read_line("/run/glass/wifi-ssid", ssid, sizeof ssid, "no Wi-Fi");
+    if (!strcmp(wip, "-")) snprintf(ssid, sizeof ssid, "no Wi-Fi");
+    read_line("/sys/class/power_supply/bq27520-0/capacity", cap, sizeof cap, "?");
+    read_line("/sys/class/power_supply/bq27520-0/status", chg, sizeof chg, "");
+    snprintf(line[0], sizeof line[0], "%s %s", ssid, wip);
+    snprintf(line[1], sizeof line[1], "tailnet %s  bat %s%%%s", tip, cap, !strcmp(chg, "Charging") ? "+" : "");
+    for (int r = 0; r < 2; r++) {
+        if (!strcmp(line[r], shown_st[r])) continue;
+        memcpy(shown_st[r], line[r], sizeof shown_st[r]);   /* both 128 bytes */
+        size_t len = strlen(line[r]);
+        for (unsigned c = 0; c < cols; c++)
+            draw_glyph(c, rows + r, c < len ? (unsigned char) line[r][c] : ' ', stc, bg);
     }
 }
 
@@ -270,9 +321,10 @@ int main(int argc, char **argv) {
     fbm = mmap(NULL, (size_t) fix.line_length * yres, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
     if (fbm == MAP_FAILED) { perror("glass-console: mmap"); return 1; }
     cw = fw * scale; ch = fh * scale;
-    cols = xres / cw; rows = yres / ch;
-    if (cols < 2 || rows < 2) { fprintf(stderr, "glass-console: %ux%u cells do not fit %ux%u\n", cw, ch, xres, yres); return 1; }
-    x0 = (xres - cols * cw) / 2; y0 = (yres - rows * ch) / 2;
+    cols = xres / cw; trows = yres / ch;
+    if (cols < 2 || trows < 4) { fprintf(stderr, "glass-console: %ux%u cells do not fit %ux%u\n", cw, ch, xres, yres); return 1; }
+    rows = trows - 2;   /* the last two: the status lines */
+    x0 = (xres - cols * cw) / 2; y0 = (yres - trows * ch) / 2;
     text = malloc((size_t) rows * cols);
     memset(text, ' ', (size_t) rows * cols);
     for (unsigned y = 0; y < yres; y++)
@@ -294,9 +346,9 @@ int main(int argc, char **argv) {
         dispc[DISPC_GFX_BA1 / 4] = (uint32_t) fix.smem_start;
         dispc[DISPC_CONTROL2 / 4] |= DISPC_GO_LCD2;
         fprintf(stderr, "glass-console: graphics layer at 0x%08x (was 0x%08x), %ux%u cells of %ux%u\n",
-                dispc[DISPC_GFX_BA0 / 4], was, cols, rows, cw, ch);
+                dispc[DISPC_GFX_BA0 / 4], was, cols, trows, cw, ch);
     } else {
-        fprintf(stderr, "glass-console: no /dev/mem: page 0 by pan only, %ux%u cells\n", cols, rows);
+        fprintf(stderr, "glass-console: no /dev/mem: page 0 by pan only, %ux%u cells\n", cols, trows);
     }
 
     master = posix_openpt(O_RDWR | O_NOCTTY);
@@ -322,9 +374,10 @@ int main(int argc, char **argv) {
         _exit(127);
     }
 
-    long next_blink = now_ms() + BLINK_MS;
+    long next_blink = now_ms() + BLINK_MS, next_status = now_ms() + 5000;
     int phase = 1;
     cursor(1);
+    status_lines();
     unsigned char buf[4096];
     for (;;) {
         long wait = next_blink - now_ms();
@@ -345,6 +398,10 @@ int main(int argc, char **argv) {
             phase = !phase;
             cursor(phase);
             next_blink += BLINK_MS;
+        }
+        if (now_ms() >= next_status) {
+            status_lines();
+            next_status = now_ms() + 5000;
         }
     }
     int st = 0;

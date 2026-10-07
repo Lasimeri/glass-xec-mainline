@@ -42,21 +42,31 @@ set -euo pipefail
 top=$(cd "$(dirname "$0")/.." && pwd)
 cd "$top"
 
-# The Glass's address: GLASS_IP; else the name "glass" when the router
-# resolves it (the Glass announces that name with its DHCP lease); else the
-# last Wi-Fi address seen (out/glass-ip, written by glass-wifi-copy and by
-# `glass ip`), if it answers a ping; else the USB link's fixed address.
+# The Glass's address: GLASS_IP; else the last Wi-Fi address seen
+# (out/glass-ip, written by glass-wifi-copy and by `glass ip`), else the
+# name "glass" when the router resolves it (the Glass announces it with a
+# DHCP lease), each if it answers a ping; else the USB link if it answers;
+# else the Glass by its MAC on this subnet; else its tailnet address; else
+# USB.
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
-    GLASS_IP=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
-    if [ -z "$GLASS_IP" ] && [ -s out/glass-ip ]; then
+    # The remembered address first (on home Wi-Fi a fixed one, glass-wifi
+    # static), then the router's name; each only if it answers (the router
+    # keeps naming an old lease after the Glass moved to a fixed address).
+    if [ -s out/glass-ip ]; then
         last=$(head -n 1 out/glass-ip)
         ping -c 1 -W 1 "$last" > /dev/null 2>&1 && GLASS_IP=$last
+    fi
+    if [ -z "$GLASS_IP" ]; then
+        n=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
+        if [ -n "$n" ] && ping -c 1 -W 1 "$n" > /dev/null 2>&1; then GLASS_IP=$n; fi
     fi
     # The last address went quiet: the USB link if it is there, else the
     # Glass by its Wi-Fi MAC (out/glass-mac) in the neighbour table after one
     # round of pings over the desktop's own subnet (about a second).
-    if [ -z "$GLASS_IP" ] && ! ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && [ -s out/glass-mac ]; then
+    usb=0
+    [ -z "$GLASS_IP" ] && ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && usb=1
+    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && [ -s out/glass-mac ]; then
         mac=$(head -n 1 out/glass-mac)
         net=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | cut -d. -f1-3)
         if [ -n "$net" ]; then
@@ -68,6 +78,13 @@ if [ -z "$GLASS_IP" ]; then
                 echo "$found" > out/glass-ip
             fi
         fi
+    fi
+    # Not on this network (the phone's hotspot, anywhere else): the Glass on
+    # the tailnet (tailscaled on the Glass, named "glass"), if it answers;
+    # the desktop's tailscale gives the address, no DNS needed.
+    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && command -v tailscale > /dev/null; then
+        ts=$(tailscale ip -4 glass 2> /dev/null | head -n 1 || true)
+        if [ -n "$ts" ] && ping -c 1 -W 2 "$ts" > /dev/null 2>&1; then GLASS_IP=$ts; fi
     fi
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
@@ -214,7 +231,11 @@ ssh_glass() {
     [ -f "$k" ] && id=(-i "$k" -o IdentitiesOnly=yes)
     # Keepalives: a session to a Glass that went away (Wi-Fi, power) ends in
     # about 10 s instead of hanging, so long-lived readers reconnect.
+    # One pinned host key for every address the Glass turns up at (home
+    # Wi-Fi, USB, the tailnet, the hotspot): HostKeyAlias checks each against
+    # the entry "glass", so a new address is never trusted on first sight.
     ssh "${id[@]}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
+        -o HostKeyAlias=glass \
         -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "root@$GLASS_IP" "$@"
 }
 
