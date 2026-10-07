@@ -15,7 +15,7 @@ Linux for **Google Glass Explorer Edition XE-C** (the 2 GB revision, TI OMAP4430
 | display | the 640x360 Himax HX7309 LCoS (312 color fields/s): an idle shell with status lines, and the desktop's monitor at 15 frames/s (NVENC H.264 over ssh, decoded on the Glass, flipped by the display controller: 0 dropped, 0 late) | `glass-console`, `glass-view.sh`, `glass-fb` |
 | sound | the desktop's sound and the voice on the bone conduction speaker (the TWL6040's Earphone output), no restarts, no underruns; Opus over the tailnet | `glass-play`, `glass audio` |
 | camera | the OV5680 through the Ducati (TI's DOMX over rpmsg, spoken in C), H.264 from the Ducati's own encoder, in a window on the desktop or on the Glass's own screen | `glass camera`, `glass local-camera on`, [docs/ducati-omx.md](docs/ducati-omx.md) |
-| touchpad | a tap toggles the desktop's voice mute | `glass-tap` |
+| touchpad | a tap turns the camera window and the display on or off together (off while it charges), a two-finger tap toggles the desktop's voice mute | `glass-tap`, `glass camera-display` |
 | battery | the bq27520 fuel gauge: the charge on every streamed frame, on the status lines and in `glass btop`; charging while plugged in | `glass-fb`, `glass btop` |
 | the Glass's screen on the desktop | the rows that changed, every 250 ms, in a window | `glass-fbgrab`, `glass-fbview` |
 | writing partitions | the rootfs (374 MB) and the boot image written from Linux over ssh with a read-back check, 374 MB in 23 s | `glass flash-rootfs`, `glass flash-boot` |
@@ -120,7 +120,7 @@ scripts/glass update          # after every change here; nothing flashed
 | `scripts/check-userland.sh` | static checks of both roots |
 | `scripts/on-glass/` | `update.sh` and `status.sh`, run on the Glass by `glass update` and `glass status` |
 | `scripts/glass-view.sh`, `glass-viewd.sh` | the desktop's monitor to the Glass, and its supervisor |
-| `scripts/glass-audio.sh`, `glass-tap.sh`, `glass-camera.sh` | the desktop's sound to the Glass, the tap as the voice mute, the camera window |
+| `scripts/glass-audio.sh`, `glass-tap.sh`, `glass-camera.sh` | the desktop's sound to the Glass, the touchpad's gestures (camera and display, voice mute), the camera window |
 | `scripts/glass-pathguard.sh`, `glass-reboot-test.sh`, `glass-unplug-test.sh` | sessions follow the path (USB or Wi-Fi); the repeatable reboot and unplug checks |
 | `scripts/glass-wifi-copy` | a Wi-Fi network copied from another machine without typing its passphrase |
 | `config/glass.config` | the mainline kernel config fragment |

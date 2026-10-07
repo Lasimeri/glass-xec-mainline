@@ -1,6 +1,6 @@
 # Daily use
 
-The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the desktop's left monitor, plays the desktop's sound, and turns a touchpad tap into the voice mute. Everything below starts by itself; this page says what does, how to reach the Glass, and the one command for each setting.
+The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the desktop's left monitor, plays the desktop's sound, turns the camera window and its own display on or off at a tap on the touchpad, and mutes the voice at a two-finger tap. Everything below starts by itself; this page says what does, how to reach the Glass, and the one command for each setting.
 
 ## What starts by itself
 
@@ -23,7 +23,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | --- | --- |
 | `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 15 frames/s; restarts the stream when the Glass returns |
 | `glass-audio.sh` | while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; when the Glass is gone, back to the stereo. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
-| `glass-tap.sh` | a tap on the touchpad toggles the voice mute (`ptt079 --toggle`) |
+| `glass-tap.sh` | a tap on the touchpad turns the camera window and the Glass's display on or off together (`glass camera-display toggle`: the display going dark or lit is the answer); a two-finger tap toggles the voice mute (`ptt079 --toggle`) |
 | `glass-camera.sh` | the camera window below, waiting for the Glass whenever it is away; a window closed or crashed is opened again by its service (to keep it closed for a while: `systemctl --user stop glass-camera`) |
 | `glass-display.service` | the Glass's own screen (its console, status lines and battery) in a window, "Glass display": `glass-fbgrab` on the Glass sends only the rows that changed every 250 ms (nothing while the screen is still), `out/glass-fbview` here keeps the picture; restarted 5 s after any exit |
 
@@ -92,14 +92,20 @@ On the desktop:
 | a fresh rootfs | `scripts/glass build`, then `scripts/glass flash-rootfs` (asks first); the image carries everything above |
 
 ## Letting it charge
-The streams draw nearly all a desktop USB port gives: with the camera stream alone the battery took 52 mA, with every stream stopped 97 mA, and with the panel blanked as well 426 mA (2026-10-07, the gauge's `current_now`):
+The streams draw nearly all a desktop USB port gives: with the camera stream alone the battery took 52 mA, with every stream stopped 97 mA, and with the panel blanked as well 426 mA (2026-10-07, the gauge's `current_now`; 74 mA again with the camera window and the display back on).
+
+**Tap the touchpad once:** the camera window and the Glass's display turn off together (the display goes dark); tap again and both come back. The same from the desktop:
 
 ```sh
-systemctl --user disable --now glass-viewd glass-display glass-camera glass-audio   # glass-tap stays: control over ssh
-scripts/glass local-camera off
-scripts/glass ssh 'echo 1 > /sys/class/graphics/fb0/blank'                         # 0 lights it again
+scripts/glass camera-display off      # on, toggle; alone it says which
 ```
-`systemctl --user enable --now` with the same names brings them back.
+The choice holds across logins here (the camera's service is enabled or disabled with it). The tap's own session to the Glass stays up, so the next tap is heard. For everything off, the desktop's monitor and sound too:
+
+```sh
+systemctl --user disable --now glass-viewd glass-display glass-audio
+scripts/glass camera-display off
+```
+`systemctl --user enable --now` with the same names, and `glass camera-display on`, bring them back.
 
 ## When something is off
 
