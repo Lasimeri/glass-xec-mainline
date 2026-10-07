@@ -4,6 +4,8 @@
  *   ffmpeg ... -f rawvideo -pix_fmt bgra - | glass-fb [-r FPS] [-b N] [/dev/fb0]
  *   ffmpeg ... -f rawvideo -pix_fmt yuv420p - | glass-fb -y [-r FPS] [-b N]
  *       (-y: I420 in, packed to YUYV for the video overlay, which converts to RGB)
+ *   glass-camera -y -w 640 -h 360 | glass-fb -n [-r FPS]
+ *       (-n: NV12 in, as the camera gives it: the camera on the Glass's own screen)
  *
  * The framebuffer (omapfb, 640x360, 32 bits) holds three pages: a frame is
  * written into a page not on screen, the display controller is pointed at
@@ -136,9 +138,19 @@ static void *reader(void *arg) {
  * packed here into YUYV, two pixels a 32-bit word, a line at a time;
  * swscale's yuv420p to yuyv422 has no fast path on this build and cost
  * twice the decode (measured 2026-10-07: ffmpeg 83% against 40%). */
-static int i420;
+static int i420, nv12;   /* -n: NV12 in (glass-camera -y), U and V interleaved */
 static void pack_yuyv(unsigned char *dst, const unsigned char *src) {
     unsigned w = var.xres, h = var.yres;
+    if (nv12) {
+        const unsigned char *Y = src, *UV = src + (size_t) w * h;
+        for (unsigned yy = 0; yy < h; yy++) {
+            const unsigned char *y = Y + (size_t) yy * w, *uv = UV + (size_t) (yy / 2) * w;
+            uint32_t *o = (uint32_t *) (dst + (size_t) yy * line);
+            for (unsigned x = 0; x < w / 2; x++)
+                o[x] = (uint32_t) y[2 * x] | ((uint32_t) uv[2 * x] << 8) | ((uint32_t) y[2 * x + 1] << 16) | ((uint32_t) uv[2 * x + 1] << 24);
+        }
+        return;
+    }
     const unsigned char *Y = src, *U = src + w * h, *V = U + (w / 2) * (h / 2);
     for (unsigned yy = 0; yy < h; yy++) {
         const unsigned char *y = Y + (size_t) yy * w, *u = U + (size_t) (yy / 2) * (w / 2), *vv = V + (size_t) (yy / 2) * (w / 2);
@@ -406,6 +418,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-r") && i + 1 < argc) fps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) cushion = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-y")) { yuv = 1; dev = "/dev/fb1"; }
+        else if (!strcmp(argv[i], "-n")) { yuv = 1; nv12 = 1; dev = "/dev/fb1"; }
         else dev = argv[i];
     }
     if (cushion < 1) cushion = 1;
