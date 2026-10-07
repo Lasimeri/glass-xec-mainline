@@ -7,7 +7,7 @@
 # compositor's own screencast (the desktop portal's PipeWire stream, opened
 # by `desk cast` from ~/deskpilot: every frame KWin composes, no
 # screenshots), GStreamer uploads it to the GPU, scales it to 640x360 and
-# encodes H.264 with NVENC at BITRATE (default 1500 kbit/s), FPS frames/s.
+# encodes H.264 with NVENC at BITRATE (default 3000 kbit/s), FPS frames/s.
 # The stream rides the ssh session to the Glass (encrypted, no listener on
 # either side; the desktop's firewall blocks inbound on the USB link
 # anyway), where a static ffmpeg in RAM (/tmp/ffmpeg, pushed from
@@ -26,7 +26,7 @@ top=$(cd "$(dirname "$0")/.." && pwd)
 W=640; H=360
 out=${1:-}
 fps=${2:-24}
-bitrate=${BITRATE:-1500}
+bitrate=${BITRATE:-3000}
 bitrate=${bitrate%k}
 # BUFFER_MS: a jitter buffer on the Glass for a link that jitters (Wi-Fi):
 # the decoder takes that much lead at the start and then paces display by
@@ -59,7 +59,14 @@ if [ -z "$out" ]; then
 fi
 case "$out" in
     window | follow) ;;
-    *) mkdir -p "$top/out"; echo "$out" > "$top/out/glass-output" ;;
+    *)
+        # Only a real monitor's name is taken (and remembered): a stray word,
+        # such as a frame rate given as the first argument, is refused.
+        if ! "${DESK:-$HOME/deskpilot/target/release/desk}" outputs 2>/dev/null | awk '{print $1}' | grep -qx "$out:"; then
+            echo "glass-view: no monitor named '$out' (desk outputs: $("${DESK:-$HOME/deskpilot/target/release/desk}" outputs 2>/dev/null | awk -F: '/^[A-Z]/ && !/workspace/ {printf "%s ", $1}'); or window, follow)" >&2
+            exit 1
+        fi
+        mkdir -p "$top/out"; echo "$out" > "$top/out/glass-output" ;;
 esac
 # OUTPUT "window": one window instead of a monitor (the portal's dialog asks
 # which; the Glass screen of glass-screen.sh is the one meant), captured at

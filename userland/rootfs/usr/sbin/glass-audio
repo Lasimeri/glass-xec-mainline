@@ -3,6 +3,9 @@
 # ALSA card 0 "Notle"). Routes the ABE's Multimedia stream (hw:0,0) to one
 # of the codec's outputs:
 #   glass-audio route earphone|handsfree|headset [VOLUME%]
+#   glass-audio volume PERCENT     the Glass's own output level, kept with the
+#                                  route (the desktop's sink volume is a
+#                                  separate control on top of it)
 #   glass-audio off
 #   glass-audio test               a tone on each output in turn, low to high
 #                                  pitch: earphone 440 Hz, handsfree 660 Hz,
@@ -58,6 +61,10 @@ tone() {   # HZ SECONDS
 }
 case "${1:-}" in
     route) route "${2:-}" "${3:-50}" && { mkdir -p /etc/glass; echo "$2 ${3:-50}" > "$conf"; } ;;
+    volume)
+        [ -f "$conf" ] || { echo "glass-audio: no route yet (glass-audio route ...)" >&2; exit 1; }
+        set -- $(cat "$conf") "${2:-50}"
+        route "$1" "$3" && echo "$1 $3" > "$conf" ;;
     off) quiet; mix 'DL1 Mixer Multimedia' off ;;
     test)
         route earphone 50; tone 440 1.5; sleep 1
