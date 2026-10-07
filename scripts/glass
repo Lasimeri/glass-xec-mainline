@@ -196,8 +196,10 @@ ssh_glass() {
     local id=()
     local k=${GLASS_SSH_KEY:-$HOME/.ssh/glass_ed25519}
     [ -f "$k" ] && id=(-i "$k" -o IdentitiesOnly=yes)
+    # Keepalives: a session to a Glass that went away (Wi-Fi, power) ends in
+    # about 10 s instead of hanging, so long-lived readers reconnect.
     ssh "${id[@]}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$top/out/known_hosts_glass" \
-        -o ConnectTimeout=5 "root@$GLASS_IP" "$@"
+        -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "root@$GLASS_IP" "$@"
 }
 
 image_for() {   # safe|full|stock
