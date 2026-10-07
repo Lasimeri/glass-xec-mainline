@@ -93,7 +93,20 @@ fb_flash() {   # PARTITION IMAGE
         die "refusing to write boot: only glass restore and restore-partition write it"
     [ -f "$img" ] || die "no $img"
     say "fastboot flash $p $img"
-    fastboot flash "$p" "$img"
+    local out rc=0
+    out=$(fastboot flash "$p" "$img" 2>&1) || rc=$?
+    echo "$out"
+    [ $rc = 0 ] && return 0
+    # platform-tools since about 2020 ask the bootloader for the partition's
+    # size before writing a boot image, and Glass's answers "0x" (reported
+    # on XE24: "Couldn't parse partition size '0x'"). flash:raw skips the
+    # question and sends the boot image as it is; only for a boot image.
+    if echo "$out" | grep -q "Couldn't parse partition size" && [ "$(head -c 8 "$img")" = 'ANDROID!' ]; then
+        say "the bootloader gave no size for $p; fastboot flash:raw $p $img"
+        fastboot flash:raw "$p" "$img"
+        return
+    fi
+    return $rc
 }
 
 # adb with root, CR stripped (adbd before Android 5 answers through a pty).
@@ -150,7 +163,8 @@ recovery_size() {
         s=$(awk '$1 == "recovery" { print $3 }' "$d/partitions.txt")
         [ -n "$s" ] && { echo "$s"; return 0; }
     fi
-    s=$(fastboot getvar partition-size:recovery 2>&1 | sed -n 's/^partition-size:recovery: *\(0x[0-9a-fA-F]*\).*/\1/p')
+    # Glass's bootloader is reported to answer a bare "0x": that is no size.
+    s=$(fastboot getvar partition-size:recovery 2>&1 | sed -n 's/^partition-size:recovery: *\(0x[0-9a-fA-F]\{1,\}\).*/\1/p')
     [ -n "$s" ] && { echo $((s)); return 0; }
     return 1
 }
@@ -199,6 +213,7 @@ case "$verb" in
         say "fastboot boot out/boot-xe24-adbroot.img (RAM only, nothing written)"
         fastboot boot out/boot-xe24-adbroot.img
         say "wait for Android, then: glass backup; glass info"
+        say "if Android comes up but adb is not root (adb shell id), the bootloader booted the flashed boot instead of this image: RAM boot is unsupported, stop and send back the fastboot output"
         ;;
 
     backup)

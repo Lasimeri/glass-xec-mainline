@@ -37,13 +37,24 @@ b98916d6cc745115e89be35158b4cf0e025e73261a8f56302e9b74d8a7b597df8bdef1ee4ce8503d
 dff792cfbb097adc8292f9beadceb4808735bccb2e5e9455b407faaba2e2938d021fe1f0b8bfd301fe300b72ae368673d1a4dbfb0912d878af6eb171732ff25a  config-google-glass.armhf
 SUMS
 
-# Google's images. XE24's rooted boot.img and every XE23 image answer 403
-# since 2026; XE24 root comes from patching the stock boot.img instead.
+# Google's images. XE24's rooted boot.img and every XE23 image are gone from
+# dl.google.com (403 early 2026, 404 by October); XE24 root comes from
+# patching the stock boot.img instead. Nothing older than XE22 is ever
+# fetched: XE9 and earlier brick a unit on XE10 or later (Google's warning).
 [ -f xe24/factory-xe24.zip ] || curl -fL -o xe24/factory-xe24.zip https://storage.googleapis.com/support-kms-prod/bTh25b2gcZx5f7apQdJU3lULYTTBoZDHqdsr
 [ -f boot-rooted-xe22.img ] || curl -fL -o boot-rooted-xe22.img https://dl.google.com/glass/xe22/boot.img
 sha1sum -c <<SUMS
 46430bc827267796566f0a73d9b503059759561c  xe24/factory-xe24.zip
 ae713187ee619dd3b24e2caf650b9b7bcb68305b  boot-rooted-xe22.img
+SUMS
+
+# The AOSP 5.1.1 ROM for glass_1 (jtxdriggers, XDA, April 2016), a reference
+# only (docs/hardware-test.md): its boot.img is a known-good custom boot
+# image for this bootloader. MD5 as the XDA post lists it; archive.org mirror.
+mkdir -p aosp
+[ -f aosp/aosp_glass-1_5.1.1_042016.zip ] || curl -fL -o aosp/aosp_glass-1_5.1.1_042016.zip https://archive.org/download/aosp_glass-1_5.1.1_042016/aosp_glass-1_5.1.1_042016.zip
+md5sum -c <<SUMS
+595c4e0b50fa191f42eb5609cfbf92fd  aosp/aosp_glass-1_5.1.1_042016.zip
 SUMS
 
 # Alpine's armv7 base.

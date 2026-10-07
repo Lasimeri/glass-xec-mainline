@@ -25,9 +25,11 @@ adb reboot bootloader          # with USB debugging on in Glass's settings
 fastboot devices               # one serial number
 fastboot getvar all 2>&1 | tee out/getvar-all.txt
 ```
-- **Without adb:** holding the camera button while powering on is said to enter the bootloader (**unverified**).
-- **You should see:** `fastboot devices` lists the Glass.
-- **Send back:** `out/getvar-all.txt`. It holds the bootloader version and perhaps partition sizes. The sizes decide whether `flash-recovery` can work without a backup.
+- **Without adb** (Google's documented way, confirmed by several owners): with the Glass off, hold the camera button, press the power button, and keep holding the camera button for 10 to 15 seconds. The display stays off in fastboot mode; the white LED flashes briefly every few seconds (one owner describes a slow pulse). `fastboot devices` is the only sure sign.
+- **The recovery menu** (one owner's report): hold the camera button, briefly hold power, release power as soon as the white LED lights, release the camera button 5 seconds later. A menu appears on the display with an entry for fastboot mode.
+- **If it never enters fastboot:** one owner found that on one particular computer the Glass always rebooted into Android instead; another USB port or computer worked. Use a USB 2 port, no hub.
+- **You should see:** `fastboot devices` lists the Glass (USB ID `18d1:9001`).
+- **Send back:** `out/getvar-all.txt`. It holds the bootloader version and perhaps partition sizes. The sizes decide whether `flash-recovery` can work without a backup. Owners on XE24 report the bootloader answers `partition-size:boot` with a bare `0x`, that is, no size; the CLI treats that as unknown.
 
 ## 3. Unlock
 **This wipes all user data on the Glass** (Google documents it as such).
@@ -36,6 +38,7 @@ fastboot oem unlock
 fastboot oem unlock            # Glass asks twice
 ```
 - **You should see:** the bootloader reports it is unlocked (`fastboot getvar unlocked`, if it answers).
+- **If it hangs:** one XE24 owner waited 15 minutes on the second `oem unlock`, killed it, and the Glass was fine (not bricked); the unlock had taken. Give it a few minutes, then check with `fastboot getvar unlocked` or by trying step 4.
 - **Send back:** the output of both commands, if either fails.
 
 ## 4. Root adb, backup, hardware info
@@ -45,7 +48,10 @@ scripts/glass root-boot        # fastboot boot out/boot-xe24-adbroot.img: stock 
 scripts/glass backup           # every partition except userdata and cache into backup/DATE/
 scripts/glass info             # getprop, iomem, partition sizes, DISPC registers, pin mux, regulators
 ```
-- **The first unknown:** whether Glass's bootloader supports `fastboot boot` (RAM boot) at all. Google only documents `fastboot flash`. If `glass root-boot` fails with "unknown command" or similar, **stop** and send back the exact error. Do not flash the adb-root image anywhere yet; flashing it to recovery would not help, because recovery boots the recovery ramdisk, not Android. That decision is made together.
+- **The first unknown:** whether Glass's bootloader supports `fastboot boot` (RAM boot) at all. Google only documents `fastboot flash`. The one report found (an XE24 owner trying a TWRP image in 2022) says `fastboot boot` sent the image ("Sending 'boot.img'") and the Glass then started normal Android. That is consistent with two things: the bootloader ignores `boot` and starts the flashed boot partition, or that TWRP image failed early. This step tells them apart: the adb-root image is Google's own XE24 kernel and ramdisk with three properties changed, so
+  - Android up and `adb shell id` says `uid=0(root)`: RAM boot works;
+  - Android up and adb is not root: the bootloader booted the flashed partition; RAM boot is unsupported. **Stop** and send back the fastboot output. Then root comes from writing the adb-root image into **recovery** (never boot) and starting recovery; it is Android with root adb either way, because the image carries Android's ramdisk, not a recovery one. That decision is made together.
+  - `fastboot boot` fails with "unknown command" or similar: the same, send back the exact error.
 - **You should see:** `backup/DATE/` with one `.img` per partition, `partitions.txt` (name, device, bytes), `SHA256SUMS`, and `info/`. `glass backup` refuses to finish if any copy's size differs from the partition's.
 - **Keep:** `backup/` (it is your way back). **Send back:** `backup/DATE/partitions.txt` and the whole `info/` directory (`info/dss-dispc.txt` most of all: it holds the framebuffer address the display work needs).
 
@@ -120,8 +126,9 @@ glass-term                       # the desktop's tmux session "claude"
 ```sh
 scripts/glass flash-recovery full
 ```
-- **Safety:** this refuses without a backup and without a known recovery size, and it never touches boot. Stock Android stays the normal boot; Linux is in recovery.
-- **Booting Linux:** `adb reboot recovery` from Android, or `fastboot reboot recovery`. Whether the bootloader supports the latter is **unverified**, and so is a button combination for recovery.
+- **Safety:** this refuses without a backup and without a known recovery size, and it never touches boot. Stock Android stays the normal boot; Linux is in recovery. An oversized image is refused by the bootloader itself ("too large for partition", reported for an 8.4 MB recovery on XE24, so recovery is under 8.4 MB; the full image is under 5.6 MB).
+- **`flash:raw`:** recent platform-tools (the desktop has 37.0.0) ask the bootloader for the partition size before writing a boot image and fail on Glass's empty answer ("Couldn't parse partition size '0x'"). The CLI then repeats the write as `fastboot flash:raw`, which owners confirm works on XE24.
+- **Booting Linux:** `adb reboot recovery` from Android, `fastboot reboot recovery` (bootloader support **unverified**), or the recovery button combination of step 2.
 
 ## 10. The desktop side of `glass-term`
 - **tmux:** Claude Code has to run inside tmux for the Glass to attach to the same session: `tmux new -A -s claude`, then `claude ...` inside it. Today `~/tts079/claude-voice.sh` starts it directly in Konsole; that has to change.
@@ -144,6 +151,16 @@ scripts/glass flash-recovery full
 scripts/glass restore          # Google's XE24 boot, recovery, system; cache erased, userdata wiped
 ```
 Or one partition from your backup: `scripts/glass restore-partition backup/DATE recovery`. `xloader`, `bootloader`, `fpga` and `efs` (per-device data: the stock fstab mounts it as `/bootconfig`) are never written by any verb.
+
+## What is known about bricking (from owners' reports, 2013 to 2022)
+- **The one documented brick:** flashing an XE9-or-earlier image onto a unit running XE10 or later (Google's warning). `scripts/fetch.sh` downloads only XE24 and XE22 images; `glass restore` flashes only XE24.
+- **Recoverable mishaps reported:** an `oem unlock` that hung 15 minutes and was killed; a stock boot.img flashed where the rooted one was meant (reflashed); a recovery image too large for its partition (refused by the bootloader). All were fixed from fastboot.
+- **Why fastboot stays reachable:** it lives in the `bootloader` partition, which no verb here writes, and the camera-and-power combination enters it without Android. A bad boot or recovery partition is therefore always re-flashable from Google's XE24 images (`glass restore`) or your backup.
+- **`fastboot boot` writes nothing:** every test-boot above runs from RAM; a hung boot is a power-cycle.
+- **A factory cable** (micro-USB with the ID pin tied to VBUS) makes Google's kernel reboot into fastboot with adb on. It is one more way in if Android boots but its debugging is off.
+
+## The rooted ROM that exists for this hardware (reference, not used)
+The only non-Google ROM for the Explorer Edition is jtxdriggers' AOSP 5.1.1 (April 2016, XDA): AOSP with the XRX13B 3.4 kernel built from source and XE22's blobs, reported working on the 2 GB model; Wi-Fi, Bluetooth pairing, touchpad and camera work, audio and backlight do not. It installs by flashing `system` and `boot`, so it replaces stock Android; it is not part of this plan. `scripts/fetch.sh` keeps its zip in `dl/aosp/` (archive.org mirror, MD5 published on XDA) because its `boot.img` is a known-good custom boot image for this bootloader, a reference for this build's images (page size, load addresses, command line), and because its device tree (`github.com/justindriggers/android_device_glass_glass-1`) documents the hardware.
 
 ## Troubleshooting
 | symptom | likely cause | what to do, what to send |

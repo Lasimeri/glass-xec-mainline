@@ -16,7 +16,7 @@ The latest mainline Linux kernel and a small Alpine Linux userland for **Google 
 - **Boot path:** Glass's Android bootloader (u-boot based) passes ATAGs only.
   - The DTB is appended to the zImage (`ARM_APPENDED_DTB`) and the bootloader's memory size (2 GB) and command line are folded into it (`ARM_ATAG_DTB_COMPAT`). The decompressor grows the DTB by 50% for that.
   - The initramfs is built into the kernel: the 15 MB decompressed kernel would overrun the bootloader's ramdisk slot 16 MB above the load address. The boot.img carries an empty ramdisk.
-- **Size bound:** every boot image must fit in 5,611,520 bytes, the size of Google's XE24 boot.img and the only proven bound on the boot and recovery partitions. `scripts/build-images.sh` refuses anything larger.
+- **Size bound:** every boot image must fit in 5,861,376 bytes, the size of the AOSP 5.1.1 boot.img that real units have held in their boot partition (Google's XE24 recovery.img, 6,344,704 bytes, proves recovery is larger still). `scripts/build-images.sh` refuses anything larger; the real sizes come from the first backup's `partitions.txt`.
 - **boot.img:** written by a small C tool (`tools/bootimg`), not AOSP's `mkbootimg.py`. It round-trips Google's own images byte for byte.
 - **Userland:** Alpine Linux 3.24 armv7 (musl, busybox).
   - Packages are installed by apk-tools on the host with `--no-scripts`: nothing armv7 runs on the build host, and what the package scripts would do is done in [scripts/build-userland.sh](scripts/build-userland.sh).
@@ -76,6 +76,7 @@ Then [docs/hardware-test.md](docs/hardware-test.md), step by step. `scripts/glas
 | linux-7.2.9 | sha256 from kernel.org's `sha256sums.asc`, signed by the Kernel.org checksum autosigner (`B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1`, fetched by WKD) |
 | Google's Glass kernel 3.4.83 (GlassHack/factory-kernel@1091b53), pmaports `config-google-glass.armhf` | sha512 from pmaports' APKBUILD |
 | Google's XE24 factory zip, XE22 rooted boot.img | SHA-1 as developers.google.com/glass/tools-downloads/system lists them |
+| AOSP 5.1.1 for glass_1 (reference only, never flashed by any verb) | MD5 as the XDA post lists it, archive.org mirror |
 | Alpine 3.24.2 armv7 minirootfs | sha256 and Natanael Copa's signature, key fingerprint `0482 D840 22F5 2DF1 C4E7 CD43 293A CD09 07D9 495A` (as alpinelinux.org/downloads lists it) |
 | Alpine packages | signatures checked by apk against the minirootfs' keys |
 | apk-tools 3.0.8 (host) | sha256 pinned, and the CachyOS signature (`882DCFE48E2051D48E2562ABF3B607488DB35A47`) where pacman's keyring is present |
