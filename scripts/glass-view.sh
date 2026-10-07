@@ -96,18 +96,25 @@ glass_ffmpeg || exit 1
 # go out as YUYV to the display controller's video overlay, which converts
 # them to RGB itself (YUV=0 for the older BGRA path on the graphics layer):
 # the Glass's CPU no longer converts every pixel, and copies half the bytes.
-decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough"
+decode="$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -flags low_delay -threads 2 -thread_type slice ${pace[*]} -i pipe:0 -fps_mode passthrough"
 has_fb=0
 for try in 1 2 3; do
     if "$top/scripts/glass" ssh 'test -x /usr/local/bin/glass-fb' < /dev/null > /dev/null 2>&1; then has_fb=1; break; fi
     sleep 1
 done
+# One frame of cushion (CUSHION=2 for two, glass-fb's most). Two were
+# tried at 24/s and left as many late slots (1 to 7 in 5 s): at the Glass's
+# thermal cap of 300 MHz the decoder could not keep 24 a second, which no
+# cushion fixes; the user chose 15 a second instead (2026-10-07), one
+# frame then being 67 ms, and the picture landing near the 150 ms the
+# Glass holds the sound back (glass-audio delay).
+cushion=${CUSHION:-1}
 if [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ]; then
-    sink="$decode -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b 1"
-    echo "glass-view: the Glass shows YUYV frames on its video overlay (converted by the display controller), on its vertical sync, $fps/s with one frame of cushion (glass-fb)" >&2
+    sink="$decode -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b $cushion"
+    echo "glass-view: the Glass shows YUYV frames on its video overlay (converted by the display controller), on its vertical sync, $fps/s with $cushion frame(s) of cushion (glass-fb)" >&2
 elif [ "$has_fb" = 1 ]; then
-    sink="$decode -pix_fmt bgra -f rawvideo - | /usr/local/bin/glass-fb -r $fps -b 1"
-    echo "glass-view: the Glass shows frames on its vertical sync, on a $fps/s schedule with one frame of cushion (glass-fb)" >&2
+    sink="$decode -pix_fmt bgra -f rawvideo - | /usr/local/bin/glass-fb -r $fps -b $cushion"
+    echo "glass-view: the Glass shows frames on its vertical sync, on a $fps/s schedule with $cushion frame(s) of cushion (glass-fb)" >&2
 else
     sink="$decode -pix_fmt bgra -f fbdev /dev/fb0"
     echo "glass-view: no glass-fb on the Glass: ffmpeg writes the visible page directly (no sync, no pacing)" >&2
@@ -155,6 +162,19 @@ fi
 # on its own deadline (the newest frame for each slot, the extras dropped),
 # which is what the Glass presents on its fixed schedule (glass-fb).
 #
+# Key frames: one at the start only (gop-size -1). With a constant bit rate
+# and a one-frame buffer, a key frame must fit a P-frame's budget and comes
+# out coarse, a visible pulse once a second (the user, 2026-10-07); the link
+# is ssh over TCP, nothing is lost, so the decoder never needs another. The
+# decoder on the Glass must keep the packets it reads while probing (no
+# -fflags nobuffer): they hold that one key frame (measured 2026-10-07: with
+# nobuffer an infinite-GOP clip decoded 0 of 48 frames, without it 48).
+# Two slices a frame (num-slices=2): the Glass decodes them on its two cores
+# at once (-threads 2 -thread_type slice), with no frame of delay that frame
+# threading would add. On one core the decoder took 90% of it at 300 MHz,
+# where the governor (target load 90) keeps the clock, and 21 to 23 frames
+# a second came out with late slots (2026-10-07).
+#
 # The downscale: the CUDA scalers are bilinear only, and one bilinear pass
 # at 6:1 (3840x2160 to 640x360) skips pixels, so text shimmers. Halving
 # steps first (bilinear at exactly 2:1 averages each 2x2 block, a true box
@@ -192,6 +212,6 @@ fi
     ! cudacompositor latency=0 sink_0::xpos=0 sink_0::ypos=0 sink_0::width="$W" sink_0::height="$H" \
     ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,framerate=$fps/1" \
     ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
-    ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size="$fps" zerolatency=true bframes=0 rc-lookahead=0 \
+    ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size=-1 num-slices=2 zerolatency=true bframes=0 rc-lookahead=0 \
     ! h264parse ! $mux ! fdsink fd=1 sync=false \
     | "$top/scripts/glass" ssh "$sink"

@@ -27,8 +27,9 @@ if [ -d "$p" ]; then
     echo 0 > "$p/enabled"
     sleep 1
     echo 1 > "$p/enabled"
-    # A quarter of the original 160 (of 223): the user halved it twice, 2026-10-07.
-    echo "${GLASS_BRIGHTNESS:-40}" > "$p/brightness"
+    # 80 of 223: the user halved the original 160 twice, then doubled it
+    # back (2026-10-07).
+    echo "${GLASS_BRIGHTNESS:-80}" > "$p/brightness"
     echo 0 > /sys/devices/platform/omapfb/graphics/fb0/blank
     echo "U:640x360p-312" > /sys/devices/platform/omapfb/graphics/fb0/mode
     log "stock kernel: notle panel enabled"

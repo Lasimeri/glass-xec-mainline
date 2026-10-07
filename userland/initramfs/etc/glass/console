@@ -1,11 +1,21 @@
 #!/bin/sh
 # console uart|usb|display: a root shell on the debug UART, the USB serial
-# gadget or the Glass display (tty1, the framebuffer console),
-# started by init and started again when it ends. Waits for the device.
+# gadget or the Glass display, started by init and started again when it
+# ends. Waits for the device.
+# The display: tty1 where the kernel has a framebuffer console (mainline);
+# the stock 3.4 kernel has none, so glass-console (tools/glass-console) draws the
+# shell on /dev/fb0 itself, under the video stream's overlay: the idle
+# picture, a prompt with a blinking cursor. Its log: /run/glass/glass-console.log.
 case "$1" in
     uart) tty=ttyS2; [ -e /dev/ttyO2 ] && tty=ttyO2 ;;
     usb) tty=ttyGS0 ;;
-    display) tty=tty1 ;;
+    display)
+        tty=tty1
+        while [ ! -e /dev/tty1 ] && [ ! -e /dev/fb0 ]; do sleep 2; done
+        if [ ! -e /dev/tty1 ] && [ -x /usr/local/bin/glass-console ]; then
+            mkdir -p /run/glass
+            exec /usr/local/bin/glass-console /bin/sh -l 2>> /run/glass/glass-console.log
+        fi ;;
     *) exit 1 ;;
 esac
 while [ ! -e "/dev/$tty" ]; do sleep 2; done

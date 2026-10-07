@@ -3,6 +3,11 @@
 # ALSA card 0 "Notle"). Routes the ABE's Multimedia stream (hw:0,0) to one
 # of the codec's outputs:
 #   glass-audio route earphone|handsfree|headset [VOLUME%]
+#                                  earphone is the bone conduction
+#                                  transducer, the Glass's own speaker: the
+#                                  stock audio HAL (audio.primary.glass_1.so)
+#                                  drives only Earphone, and Headset for the
+#                                  earbud, never Handsfree or Vibra
 #   glass-audio volume PERCENT     the Glass's own output level, kept with the
 #                                  route (the desktop's sink volume is a
 #                                  separate control on top of it)
@@ -12,14 +17,20 @@
 #   glass-audio off
 #   glass-audio test               a tone on each output in turn, low to high
 #                                  pitch: earphone 440 Hz, handsfree 660 Hz,
-#                                  headset 880 Hz (which one is the bone
-#                                  conduction transducer is found by ear)
+#                                  headset 880 Hz
+#   glass-audio delay [MS]         how far the sound runs behind the
+#                                  desktop, kept here on the Glass
+#                                  (/etc/glass/audio-delay, default 150; a
+#                                  playing session follows within 2 s)
 #   glass-audio play               raw s16le 48 kHz mono on stdin to the ABE's
-#                                  Multimedia stream (both channels), held
-#                                  in a buffer of BUFFER_US microseconds
+#                                  Multimedia stream (both channels), that
+#                                  delay behind (glass-play); to the kept
+#                                  route, or the headset outputs while an
+#                                  earbud is plugged in
 # The route chosen last is kept in /etc/glass/audio-route.
 set -u
 conf=/etc/glass/audio-route
+delay=/etc/glass/audio-delay
 mix() { amixer -q -c 0 cset "name=$1" "$2" > /dev/null 2>&1 || echo "glass-audio: $1 = $2 refused" >&2; }
 common() {
     mix 'DL1 Mixer Multimedia' on
@@ -75,6 +86,13 @@ case "${1:-}" in
         [ -f "$conf" ] || { echo "glass-audio: no route yet (glass-audio route ...)" >&2; exit 1; }
         set -- $(cat "$conf") "${2:-50}"
         route "$1" "$3" && echo "$1 $3" > "$conf" ;;
+    delay)
+        if [ -n "${2:-}" ]; then
+            case "$2" in *[!0-9]*) echo "glass-audio delay MS (50 to 2000)" >&2; exit 1 ;; esac
+            [ "$2" -ge 50 ] && [ "$2" -le 2000 ] || { echo "glass-audio delay MS (50 to 2000)" >&2; exit 1; }
+            echo "$2" > "$delay"
+        fi
+        echo "$(cat "$delay" 2> /dev/null || echo 150) ms" ;;
     off) quiet; mix 'DL1 Mixer Multimedia' off ;;
     test)
         route earphone 50; tone 440 1.5; sleep 1
@@ -82,21 +100,35 @@ case "${1:-}" in
         route headset 50; tone 880 1.5
         quiet ;;
     play)
-        # An earbud or headset plugged in takes the headset outputs.
-        if "$0" jack > /dev/null; then
-            set -- $(cat "$conf" 2> /dev/null) 50 50
-            route headset "${2:-50}"
-        elif [ -f "$conf" ]; then
-            route $(cat "$conf")
+        # The route kept (default: the bone conduction transducer at 50%);
+        # an earbud or headset plugged in takes the headset outputs at the
+        # same level, and the sound moves back when it is unplugged.
+        out() { if "$0" jack > /dev/null; then echo headset; else echo own; fi; }
+        use() {
+            set -- $(cat "$conf" 2> /dev/null) earphone 50
+            if [ "$cur" = headset ]; then route headset "$2"; else route "$1" "$2"; fi
+        }
+        cur=$(out); use
+        # stdin through a copy on fd 3: a non-interactive shell gives a
+        # command started with & /dev/null instead, and busybox sh does so
+        # even with <&0 (aplay then read nothing and ended at once: every
+        # session was silent until 2026-10-07).
+        # glass-play (tools/glass-play) holds the delay set here (glass-audio
+        # delay) however the desktop's and the Glass's clocks drift; aplay
+        # fell 650 ms behind in twenty minutes. aplay stays the fallback.
+        [ -f "$delay" ] || echo 150 > "$delay"
+        exec 3<&0
+        if [ -x /usr/local/bin/glass-play ]; then
+            /usr/local/bin/glass-play -f "$delay" <&3 &
+        else
+            aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="$(( $(cat "$delay") * 1000 ))" <&3 &
         fi
-        aplay -q -D plughw:0,0 -f S16_LE -r 48000 -c 1 -t raw --buffer-time="${BUFFER_US:-100000}" &
         a=$!
-        # Unplugging the earbud ends the session (the desktop's sound goes
-        # back to its own output).
         while kill -0 $a 2> /dev/null; do
             sleep 2
-            "$0" jack > /dev/null || { kill $a; break; }
+            n=$(out)
+            [ "$n" = "$cur" ] || { cur=$n; use; }
         done
         wait $a 2> /dev/null ;;
-    *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

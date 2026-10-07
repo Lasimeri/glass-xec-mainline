@@ -2,8 +2,9 @@
 # glass-viewd.sh: the desktop's monitor on the glasses whenever the Glass is
 # up: waits for the Glass to answer (Wi-Fi or USB), opens a terminal on the
 # desktop with a shell on the Glass, runs glass-view.sh (the monitor last
-# chosen, 24 frames/s), and starts it again when the Glass reboots, dies or
-# leaves the network. Started at login by
+# chosen, 15 frames/s: the user's choice on 2026-10-07, what the Glass
+# decodes steadily at its thermal cap), and starts it again when the Glass
+# reboots, dies or leaves the network. Started at login by
 # ~/.config/autostart/glass-viewd.desktop; a second copy refuses to start.
 # The sound has its own supervisor (glass-audio.sh), the tap too
 # (glass-tap.sh).
@@ -27,10 +28,12 @@ while :; do
             # hold the lock after the supervisor ends and block the next start.
             setsid konsole --separate -p tabtitle="Glass shell" -e "$top/scripts/glass" ssh > /dev/null 2>&1 < /dev/null 9>&- &
         fi
-        BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 24 >> "$log" 2>&1 9>&-
+        BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 15 >> "$log" 2>&1 9>&-
         echo "glass-viewd: $(date +%T) stream ended" >> "$log"
-        # The decoder on the Glass, if the session died under it.
-        "$top/scripts/glass" ssh 'for p in $(pidof ffmpeg glass-fb); do kill $p; done; true' < /dev/null > /dev/null 2>&1
+        # The decoder on the Glass, if the session died under it: ffmpeg
+        # first, so glass-fb sees the end of its input and puts the console
+        # back (it also does on SIGTERM).
+        "$top/scripts/glass" ssh 'for p in $(pidof ffmpeg); do kill $p; done; sleep 1; for p in $(pidof glass-fb); do kill $p; done; true' < /dev/null > /dev/null 2>&1
     fi
     sleep 5
 done

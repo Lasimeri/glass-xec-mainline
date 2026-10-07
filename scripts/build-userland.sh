@@ -99,7 +99,11 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     # stream, compiled on the Glass itself (gcc from Alpine over Wi-Fi) and
     # copied back to out/glass-fb; there is no ARM compiler here.
     # glass-tap (tools/glass-tap): the touchpad's taps as lines, the same way.
-    for t in glass-fb glass-tap; do
+    # glass-console (tools/glass-console): the shell drawn on the display
+    # (the stock kernel has no framebuffer console), the same way.
+    # glass-play (tools/glass-play): the sound at a fixed delay however the
+    # clocks drift; built with -lasound (alsa-lib-dev on the Glass).
+    for t in glass-fb glass-tap glass-console glass-play; do
         if [ -f "$top/out/$t" ]; then
             mkdir -p "$r/usr/local/bin" "$r/usr/local/src"
             cp "$top/out/$t" "$r/usr/local/bin/$t"
@@ -107,6 +111,15 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
             cp "$top/tools/$t/$t.c" "$r/usr/local/src/"
         fi
     done
+    # glass-console's font: Terminus 8x16 (SIL OFL) from this machine's kbd
+    # package, unpacked; not kept in the repository.
+    font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
+    if [ -f "$font" ]; then
+        mkdir -p "$r/usr/share/glass"
+        gzip -dc "$font" > "$r/usr/share/glass/console.psf"
+    else
+        echo "build-userland: no $font (kbd): glass-console will not start" >&2
+    fi
     # What dbus' pre-install script would have done.
     grep -q '^messagebus:' "$r/etc/group" || echo 'messagebus:x:101:' >> "$r/etc/group"
     grep -q '^messagebus:' "$r/etc/passwd" ||
