@@ -221,6 +221,89 @@ static void on_signal(int sig) {
     _exit(0);
 }
 
+/* The battery, top right on every frame shown: the fuel gauge's charge
+ * (bq27520's capacity, the one glass-console's status line shows), "+"
+ * while charging, full or on USB power, read every 10 s; white on a dark box, red under
+ * 20 percent while not plugged in. The stream covers the console, so this is
+ * where the charge is seen while it runs. GLASS_FB_BATTERY=0: none. */
+#define BATT "/sys/class/power_supply/bq27520-0/"
+static const unsigned char glyph5x7[13][7] = {
+    { 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E }, { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E },
+    { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F }, { 0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E },
+    { 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 }, { 0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E },
+    { 0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E }, { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
+    { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E }, { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C },
+    { 0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03 },   /* % */
+    { 0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00 },   /* + */
+    { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04 },   /* ? */
+};
+static char batt[8];
+static int batt_low, batt_off = -1;
+static double batt_at = -100;
+
+static void batt_read(void) {
+    double t = now_s();
+    if (t - batt_at < 10) return;
+    batt_at = t;
+    char cap[16] = "", st[32] = "";
+    FILE *f = fopen(BATT "capacity", "r");
+    if (f) { if (!fgets(cap, sizeof cap, f)) cap[0] = 0; fclose(f); }
+    f = fopen(BATT "status", "r");
+    if (f) { if (!fgets(st, sizeof st, f)) st[0] = 0; fclose(f); }
+    /* Plugged in: the USB supply online (the gauge's own status flips
+     * between charging and not while its current reads 0). */
+    char usb[8] = "";
+    f = fopen("/sys/class/power_supply/twl6030_usb/online", "r");
+    if (f) { if (!fgets(usb, sizeof usb, f)) usb[0] = 0; fclose(f); }
+    if (!cap[0]) { snprintf(batt, sizeof batt, "?%%"); batt_low = 0; return; }
+    int c = atoi(cap), charging = !strncmp(st, "Charging", 8) || !strncmp(st, "Full", 4) || usb[0] == '1';
+    snprintf(batt, sizeof batt, "%d%%%s", c, charging ? "+" : "");
+    batt_low = c < 20 && !charging;
+}
+
+/* One pixel of colour c (0 the box, 1 white, 2 red) in the page at dst:
+ * YUYV (a pair of pixels shares U and V; the glyphs are drawn on whole
+ * pairs) or BGRA. */
+static void batt_px(unsigned char *dst, unsigned x, unsigned y, int c) {
+    static const unsigned char Y[3] = { 16, 235, 81 }, U[3] = { 128, 128, 90 }, V[3] = { 128, 128, 240 };
+    static const unsigned char R[3] = { 0, 255, 255 }, G[3] = { 0, 255, 0 }, B[3] = { 0, 255, 0 };
+    if (x >= var.xres || y >= var.yres) return;
+    unsigned char *p = dst + (size_t) y * line;
+    if (i420) {
+        unsigned char *q = p + (size_t) (x / 2) * 4;
+        q[(x & 1) ? 2 : 0] = Y[c];
+        q[1] = U[c];
+        q[3] = V[c];
+    } else {
+        unsigned char *q = p + (size_t) x * 4;
+        q[0] = B[c]; q[1] = G[c]; q[2] = R[c]; q[3] = 255;
+    }
+}
+
+static void draw_batt(unsigned char *dst) {
+    if (batt_off < 0) { const char *e = getenv("GLASS_FB_BATTERY"); batt_off = e && !strcmp(e, "0"); }
+    if (batt_off) return;
+    batt_read();
+    size_t n = strlen(batt);
+    if (!n) return;
+    const unsigned S = 2, cw = 6 * S, ch = 7 * S, pad = 4;
+    unsigned bw = (unsigned) n * cw - S + 2 * pad, bh = ch + 2 * pad;
+    if (bw + 8 > var.xres) return;
+    unsigned x0 = (var.xres - bw - 8) & ~1u, y0 = 8;
+    for (unsigned y = 0; y < bh; y++)
+        for (unsigned x = 0; x < bw; x++) batt_px(dst, x0 + x, y0 + y, 0);
+    for (size_t i = 0; i < n; i++) {
+        char k = batt[i];
+        int g = k >= '0' && k <= '9' ? k - '0' : k == '%' ? 10 : k == '+' ? 11 : 12;
+        for (unsigned r = 0; r < 7; r++)
+            for (unsigned c = 0; c < 5; c++)
+                if (glyph5x7[g][r] & (0x10 >> c))
+                    for (unsigned dy = 0; dy < S; dy++)
+                        for (unsigned dx = 0; dx < S; dx++)
+                            batt_px(dst, x0 + pad + (unsigned) i * cw + c * S + dx, y0 + pad + r * S + dy, batt_low ? 2 : 1);
+    }
+}
+
 static void show(const unsigned char *buf) {
     int next = shown + 1 >= pages ? first_page : shown + 1;
     unsigned char *dst = mem + page * next;
@@ -231,6 +314,7 @@ static void show(const unsigned char *buf) {
     } else {
         for (unsigned y = 0; y < var.yres; y++) memcpy(dst + (size_t) y * line, buf + y * row, row);
     }
+    draw_batt(dst);
     var.yoffset = var.yres * next;
     var.xoffset = 0;
     ioctl(fb, FBIOPAN_DISPLAY, &var);

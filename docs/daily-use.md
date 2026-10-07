@@ -13,6 +13,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | clock | set from the internet once an address exists, retried for two minutes |
 | Tailscale (`tailscaled`) | the Glass on the tailnet as `glass`, reachable from the desktop on any network |
 | display shell (`glass-console`) | a shell with a blinking cursor and two status lines (network and address, tailnet address, battery), shown whenever no stream is |
+| battery on the stream (`glass-fb`) | the charge in the top right corner of every frame the stream shows (the fuel gauge, read every 10 s), "+" while plugged in, red under 20 percent unplugged; `GLASS_FB_BATTERY=0` for none |
 | panel | brightness as kept (`glass-brightness`) |
 | ssh (`dropbear`) | key login only, the desktop's `~/.ssh/glass_ed25519` |
 
