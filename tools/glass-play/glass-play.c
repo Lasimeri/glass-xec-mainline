@@ -49,7 +49,13 @@ static int rate = 48000;          /* -r: the stream's sample rate (int: the comp
 #define RING_MAX (RATE_MAX * 2)
 #define CHUNK (RATE * 5 / 1000)  /* 5 ms written at a time */
 #define CHUNK_MAX (RATE_MAX * 5 / 1000)
-#define DEVICE_US 40000          /* the device's own buffer */
+/* The device's own buffer: a third of the target, 40 to 120 ms. 40 ms
+ * alone ran dry 81 times in 30 s over the tailnet, the 300 MHz CPU busy
+ * with WireGuard and the Opus decoder (2026-10-07). */
+static unsigned device_us(int target_ms) {
+    int ms = target_ms / 3;
+    return (unsigned) (ms < 40 ? 40 : ms > 120 ? 120 : ms) * 1000;
+}
 #define TOL (RATE * 5 / 1000)    /* 5 ms either side of the target */
 #define CUT (RATE * 80 / 1000)   /* a lasting error this large is corrected at once */
 
@@ -104,7 +110,7 @@ int main(int argc, char **argv) {
     snd_pcm_t *pcm;
     int err = snd_pcm_open(&pcm, dev, SND_PCM_STREAM_PLAYBACK, 0);
     if (err < 0) { fprintf(stderr, "glass-play: %s: %s\n", dev, snd_strerror(err)); return 1; }
-    err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 1, RATE, 1, DEVICE_US);
+    err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 1, RATE, 1, device_us(target_ms));
     if (err < 0) { fprintf(stderr, "glass-play: %s: %s\n", dev, snd_strerror(err)); return 1; }
     snd_pcm_uframes_t bufsize, persize;
     snd_pcm_get_params(pcm, &bufsize, &persize);
@@ -218,9 +224,11 @@ int main(int argc, char **argv) {
             report = now_s() + 30;
         }
         /* Until input comes or the device is down to two chunks. */
-        int ms = (int) ((queued - 2 * CHUNK) * 1000 / RATE);
+        /* Woken with half the device's buffer still to play: margin for a
+         * busy CPU (the old 10 ms margin underran over the tailnet). */
+        int ms = (int) ((queued - (long) bufsize / 2) * 1000 / RATE);
         if (ms < 1) ms = 1;
-        if (ms > 20) ms = 20;
+        if (ms > 10) ms = 10;
         struct pollfd p = { .fd = 0, .events = POLLIN };
         if (eof) usleep(ms * 1000);
         else poll(&p, 1, ms);
