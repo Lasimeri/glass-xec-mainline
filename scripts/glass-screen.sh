@@ -64,7 +64,14 @@ case "${1:-}" in
         ;;
     stop)
         for p in $(pgrep -f "kwin_wayland.*--socket $sock"); do kill "$p"; done
-        echo "glass-screen: stopped"
+        # The placement rule goes with it.
+        f=$HOME/.config/kwinrulesrc
+        rules=$(kreadconfig6 --file "$f" --group General --key rules | tr ',' '\n' | grep -vx "$rule" | paste -sd,)
+        kwriteconfig6 --file "$f" --group General --key rules "$rules"
+        kwriteconfig6 --file "$f" --group General --key count "$(echo "$rules" | tr ',' '\n' | grep -c .)"
+        sed -i "/^\[$rule\]\$/,/^\$/d" "$f"
+        qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure > /dev/null 2>&1 || true
+        echo "glass-screen: stopped, rule removed"
         ;;
     *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
