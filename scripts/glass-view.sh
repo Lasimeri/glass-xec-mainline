@@ -72,8 +72,37 @@ castopt=()
 [ "$out" = window ] && castopt=(--window)
 # ASK=1: ask again in the dialog (another window or monitor than last time).
 [ "${ASK:-0}" = 1 ] && castopt+=(--forget)
-# No cropping of a monitor: the Glass screen (glass-screen.sh) is captured as
-# the window it is, its own 1280x720 surface, whole.
+# OUTPUT "follow": pixel perfect. A 640x360 window of the primary monitor,
+# one pixel to one pixel, that follows the pointer (desk cursor, through a
+# KWin script) and pans when the pointer nears its edge: the glasses show
+# what you are looking at, at the size the desktop draws it.
+# tools/glass-viewport (C, GStreamer) runs the GPU pipeline with the moving
+# window; built here on first use.
+if [ "$out" = follow ]; then
+    out=$(kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | awk '/Output:/ { o=$3 } /priority 1/ { print o; exit }')
+    [ -n "$out" ] || out=DP-1
+    geo=$("$desk" outputs 2>/dev/null | awk -v o="$out:" '$1 == o { print $2, $4 }')
+    ow=${geo%% *}; pos=${geo##* }; pos=${pos%,}; ow=${ow%x*}; oh=${geo%% *}; oh=${oh#*x}; ox=${pos%,*}; oy=${pos#*,}
+    [ -n "$ow" ] && [ -n "$oh" ] || { echo "glass-view: no geometry for $out (desk outputs)" >&2; exit 1; }
+    vp=$top/build/glass-viewport
+    if [ ! -x "$vp" ] || [ "$top/tools/glass-viewport/glass-viewport.c" -nt "$vp" ]; then
+        mkdir -p "$top/build"
+        gcc -O2 -o "$vp" "$top/tools/glass-viewport/glass-viewport.c" $(pkg-config --cflags --libs gstreamer-1.0) -lpthread || exit 1
+    fi
+    glass_ffmpeg || exit 1
+    fifo=$(mktemp -u "${XDG_RUNTIME_DIR:-/tmp}/glass-cursor.XXXXXX")
+    mkfifo "$fifo"
+    trap 'rm -f "$fifo"' EXIT
+    "$desk" cursor > "$fifo" &
+    cur=$!
+    trap 'kill $cur 2> /dev/null; rm -f "$fifo"' EXIT
+    echo "glass-view: $out -> a ${W}x${H} window following the pointer, pixel for pixel, NVENC H.264 ${bitrate} kbit/s, $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
+    "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$W" "$H" "$fps" "$bitrate" "$fifo" \
+        | "$top/scripts/glass" ssh "$gff -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay -threads 1 ${pace[*]} -i pipe:0 -fps_mode passthrough -pix_fmt bgra -f fbdev /dev/fb0"
+    exit
+fi
+# No cropping of a monitor otherwise: the Glass screen (glass-screen.sh) is
+# captured as the window it is, its own 1280x720 surface, whole.
 
 # The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
 # pushed into RAM once per boot on an initramfs-only Glass.
