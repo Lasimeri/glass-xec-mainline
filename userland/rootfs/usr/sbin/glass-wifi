@@ -7,6 +7,8 @@
 #                                     and only the derived 256-bit key is
 #                                     kept (/etc/wpa_supplicant, root only)
 #   glass-wifi forget SSID            drop a stored network
+#   glass-wifi priority SSID N        join it before networks with a lower N
+#                                     when several are in range (default 0)
 #   glass-wifi up | down | scan | status | list
 c=/etc/wpa_supplicant/wpa_supplicant.conf
 die() { echo "glass-wifi: $*" >&2; exit 1; }
@@ -66,10 +68,27 @@ case "${1:-}" in
     forget)
         [ -n "${2:-}" ] || die "glass-wifi forget SSID"
         [ -f "$c" ] || exit 0
+        # The SSID compared as text, not as a pattern ("O+ Open" has a +).
         awk -v s="$2" '
             /^network=\{/ { blk = $0; inb = 1; keep = 1; next }
-            inb { blk = blk "\n" $0; if ($0 ~ "^[ \t]*ssid=\"" s "\"") keep = 0; if ($0 ~ /^\}/) { inb = 0; if (keep) print blk }; next }
+            inb { blk = blk "\n" $0; t = $0; sub(/^[ \t]+/, "", t); if (t == "ssid=\"" s "\"") keep = 0; if ($0 ~ /^\}/) { inb = 0; if (keep) print blk }; next }
             { print }' "$c" > "$c.new" && mv "$c.new" "$c" && chmod 600 "$c"
+        if [ -S /run/wpa_supplicant/wlan0 ]; then wpa_cli -i wlan0 reconfigure > /dev/null; fi
+        ;;
+    priority)
+        # With several stored networks in range the highest number is
+        # joined (wpa_supplicant's priority; 0 when unset): home above the
+        # phone's hotspot keeps the Glass home while both are there.
+        [ -n "${2:-}" ] && [ -n "${3:-}" ] || die "glass-wifi priority SSID N"
+        case "$3" in *[!0-9]*) die "glass-wifi priority SSID N (a whole number, 0 or more)" ;; esac
+        [ -f "$c" ] || die "no networks stored (glass-wifi add)"
+        grep -q "^[[:space:]]*ssid=\"$(printf '%s' "$2" | sed 's/[][\.*^$/]/\\&/g')\"" "$c" || die "$2 is not stored (glass-wifi list)"
+        awk -v s="$2" -v p="$3" '
+            /^network=\{/ { n = 0; inb = 1; mine = 0; l[++n] = $0; next }
+            inb && /^\}/ { for (i = 1; i <= n; i++) if (!(mine && l[i] ~ /^[ \t]*priority=/)) print l[i]; if (mine) print "\tpriority=" p; print; inb = 0; next }
+            inb { l[++n] = $0; t = $0; sub(/^[ \t]+/, "", t); if (t == "ssid=\"" s "\"") mine = 1; next }
+            { print }' "$c" > "$c.new" && mv "$c.new" "$c" && chmod 600 "$c"
+        echo "glass-wifi: $2 priority $3"
         if [ -S /run/wpa_supplicant/wlan0 ]; then wpa_cli -i wlan0 reconfigure > /dev/null; fi
         ;;
     up)
@@ -80,7 +99,10 @@ case "${1:-}" in
         iw dev wlan0 set power_save off 2> /dev/null
         # Backgrounds and keeps asking when the lease is slow (an access
         # point not yet up at boot); the router learns the name "glass".
-        udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 || die "udhcpc did not start"
+        # One client only: up runs again after a network is added.
+        if ! { [ -f /run/udhcpc.wlan0.pid ] && kill -0 "$(cat /run/udhcpc.wlan0.pid)" 2> /dev/null; }; then
+            udhcpc -b -i wlan0 -p /run/udhcpc.wlan0.pid -x hostname:glass -t 5 -T 3 || die "udhcpc did not start"
+        fi
         # The clock: no battery-backed time survives a power-off here, and
         # TLS (apk's mirrors) refuses a date in 2000; once joined, set it.
         (sleep 5; ntpd -n -q -p pool.ntp.org > /dev/null 2>&1) &
