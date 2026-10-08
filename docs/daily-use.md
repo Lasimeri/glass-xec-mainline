@@ -21,7 +21,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 
 | supervisor | what it does |
 | --- | --- |
-| `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 15 frames/s; restarts the stream when the Glass returns |
+| `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 12 frames/s; restarts the stream when the Glass returns |
 | `glass-audio.sh` | while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; when the Glass is gone, back to the stereo. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
 | `glass-tap.sh` | a tap on the touchpad turns the camera window and the Glass's display on or off together (`glass camera-display toggle`: the display going dark or lit is the answer); a two-finger tap toggles the voice mute (`ptt079 --toggle`) |
 | `glass-camera.sh` | the camera window below, waiting for the Glass whenever it is away; a window closed or crashed is opened again by its service (to keep it closed for a while: `systemctl --user stop glass-camera`) |
@@ -80,7 +80,7 @@ On the desktop:
 | setting | where |
 | --- | --- |
 | which monitor | `scripts/glass-view.sh MONITOR 15` once (remembered in `out/glass-output`); now DP-2, the left one |
-| frame rate | `scripts/glass-viewd.sh` passes 15; the Glass is held to 300 MHz by its own thermal governors when warm, and 24 a second was not kept there |
+| frame rate | `scripts/glass-viewd.sh` passes 12 (the user's choice, beside the camera at 15); the Glass is held to 300 MHz by its own thermal governors when warm, and 24 a second was not kept there |
 | video bit rate and cushion | `BITRATE=3000` (kbit/s) and `CUSHION=1` (frames, up to 6) for `glass-view.sh`; over the tailnet 1500, about 250 ms, and `REMOTE_FPS=12` by default |
 
 ## Keeping it current

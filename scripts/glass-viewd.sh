@@ -2,10 +2,10 @@
 # glass-viewd.sh: the desktop's monitor on the glasses whenever the Glass is
 # up: waits for the Glass to answer (Wi-Fi or USB), opens a terminal on the
 # desktop with a shell on the Glass, runs glass-view.sh (the monitor last
-# chosen, 15 frames/s: the user's choice on 2026-10-07, what the Glass
-# decodes steadily at its thermal cap), and starts it again when the Glass
-# reboots, dies or leaves the network. Started at login by
-# ~/.config/autostart/glass-viewd.desktop; a second copy refuses to start.
+# chosen, 12 frames/s: the user's choice on 2026-10-07, beside the camera at
+# 15 on the same thermally capped Glass), and starts it again when the Glass
+# reboots, dies or leaves the network. Run by
+# glass-viewd.service (glass setup-desktop); a second copy refuses to start.
 # The sound has its own supervisor (glass-audio.sh), the tap too
 # (glass-tap.sh).
 #   glass-viewd.sh            run (foreground; log $XDG_RUNTIME_DIR/glass-viewd.log)
@@ -34,7 +34,7 @@ while :; do
         # stream in its own process group (set -m) so it ends whole.
         addr=$("$top/scripts/glass" addr 2> /dev/null || true)
         set -m
-        GLASS_IP=$addr BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 15 >> "$log" 2>&1 9>&- &
+        GLASS_IP=$addr BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 12 >> "$log" 2>&1 9>&- &
         view=$!
         set +m
         "$top/scripts/glass-pathguard.sh" "$addr" "-$view" >> "$log" 2>&1 9>&- &

@@ -12,7 +12,7 @@ Linux for **Google Glass Explorer Edition XE-C** (the 2 GB revision, TI OMAP4430
 | USB | RNDIS up in 15 s, ssh at `172.16.42.1`, serial console; a fallback only, every session moves to Wi-Fi when the cable comes out (`glass unplug-test`) | initramfs, `glass-pathguard.sh` |
 | Wi-Fi | the BCM4330 with Google's firmware (5.90.195.122): stored networks joined at boot by priority, a fixed address at home, power save off, a watchdog for drops and driver hangs | `glass-wifi` |
 | Tailscale | the Glass on the tailnet as `glass`, reachable from any network | `tailscaled` |
-| display | the 640x360 Himax HX7309 LCoS (312 color fields/s): an idle shell with status lines, and the desktop's monitor at 15 frames/s (NVENC H.264 over ssh, decoded on the Glass, flipped by the display controller: 0 dropped, 0 late) | `glass-console`, `glass-view.sh`, `glass-fb` |
+| display | the 640x360 Himax HX7309 LCoS (312 color fields/s): an idle shell with status lines, and the desktop's monitor at 12 frames/s (NVENC H.264 over ssh, decoded on the Glass, flipped by the display controller: 0 dropped, 0 late) | `glass-console`, `glass-view.sh`, `glass-fb` |
 | sound | the desktop's sound and the voice on the bone conduction speaker (the TWL6040's Earphone output), no restarts, no underruns; Opus over the tailnet | `glass-play`, `glass audio` |
 | camera | the OV5680 through the Ducati (TI's DOMX over rpmsg, spoken in C), H.264 from the Ducati's own encoder, in a window on the desktop or on the Glass's own screen | `glass camera`, `glass local-camera on`, [docs/ducati-omx.md](docs/ducati-omx.md) |
 | touchpad | a tap turns the camera window and the display on or off together (off while it charges), a two-finger tap toggles the desktop's voice mute | `glass-tap`, `glass camera-display` |
@@ -20,7 +20,7 @@ Linux for **Google Glass Explorer Edition XE-C** (the 2 GB revision, TI OMAP4430
 | the Glass's screen on the desktop | the rows that changed, every 250 ms, in a window | `glass-fbgrab`, `glass-fbview` |
 | writing partitions | the rootfs (374 MB) and the boot image written from Linux over ssh with a read-back check, 374 MB in 23 s | `glass flash-rootfs`, `glass flash-boot` |
 
-Heat sets the pace: when warm, the thermal cap holds the CPU at 300 MHz whatever the governor asks, which is why the stream runs at 15 frames/s.
+Heat sets the pace: when warm, the thermal cap holds the CPU at 300 MHz whatever the governor asks, which is why the monitor stream runs at 12 frames/s and the camera at 15.
 
 ## Approach
 - **Kernels:**
