@@ -5,12 +5,13 @@
 #             toggle as the number pad's period (ptt079 --toggle in ~/tts079:
 #             $XDG_RUNTIME_DIR/speak-079/muted, the status line, and
 #             "Muted." / "Listening." in 079's voice)
-#   a swipe   the camera stream and the Glass's display on or off together
-#             (glass camera-display toggle: off while it charges); the
-#             display going dark or lit is the answer
-#   a two-finger tap  the display's next source (glass display next: camera,
-#             the camera alone, each monitor, follow, console); a desktop
-#             notification names it
+#   a two-finger tap  the stream on or off: the chosen display source and
+#             the display together (glass camera-display toggle: off while
+#             it charges); the display going dark or lit is the answer
+#   a swipe   forward: the next display source; back: the one before
+#             (glass display next|prev: camera, the camera alone, each
+#             monitor, follow, console); a desktop notification names it;
+#             which way is forward: glass swipe-forward + or -
 #
 # The desktop holds an ssh session to the Glass and reads glass-tap's lines
 # (tools/glass-tap, on the Glass at /usr/local/bin/glass-tap); the Glass
@@ -42,16 +43,25 @@ while :; do
     GLASS_IP=$addr "$top/scripts/glass" ssh 'pkill -x glass-tap; exec /usr/local/bin/glass-tap' < /dev/null 2>> "$log" 9>&- |
         while read -r g; do
             case "$g" in
-                swipe)
-                    echo "glass-tap: $(date +%T) swipe: camera stream and display toggled" >> "$log"
+                tap2)
+                    # Two fingers: the stream (the chosen source) on or off,
+                    # the display with it (glass camera-display toggle).
+                    echo "glass-tap: $(date +%T) two-finger tap: stream and display toggled" >> "$log"
                     GLASS_IP=$addr setsid flock -n "$run/glass-camera-display.lock" \
                         "$top/scripts/glass" camera-display toggle < /dev/null >> "$log" 2>&1 9>&- &
                     ;;
-                tap2)
-                    # Two fingers: the display's next source (glass display next).
-                    echo "glass-tap: $(date +%T) two-finger tap: next display source" >> "$log"
+                "swipe +" | "swipe -" | swipe)
+                    # One finger along the pad: forward is the next display
+                    # source, back the one before (glass display next|prev).
+                    # Which sign is forward: out/glass-swipe-forward (+ by
+                    # default; glass swipe-forward - flips it). A Glass whose
+                    # glass-tap is older says only "swipe": next.
+                    fwd=$(head -c 1 "$top/out/glass-swipe-forward" 2> /dev/null || true)
+                    dir=next
+                    case "$g" in "swipe +") [ "${fwd:-+}" = + ] || dir=prev ;; "swipe -") [ "${fwd:-+}" = - ] || dir=prev ;; esac
+                    echo "glass-tap: $(date +%T) $g: $dir display source" >> "$log"
                     GLASS_IP=$addr setsid flock -n "$run/glass-display.lock" \
-                        "$top/scripts/glass" display next < /dev/null >> "$log" 2>&1 9>&- &
+                        "$top/scripts/glass" display "$dir" < /dev/null >> "$log" 2>&1 9>&- &
                     ;;
                 tap)
                     "$toggle" --toggle

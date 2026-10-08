@@ -150,7 +150,10 @@ static void event(struct pad *p, const struct input_event *e) {
             else if (p->moved && p->maxf == 1 && dt < SWIPE_MS && abs(dx) >= p->span / 5) g = "swipe";
             else if (p->moved) why = p->maxf == 1 && dt < SWIPE_MS ? "moved, too short for a swipe" : "moved, no gesture";
             else why = dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no gesture";
-            if (g) { printf("%s\n", g); fflush(stdout); }
+            /* A swipe carries its direction along the pad (+ or -): the desktop
+             * maps one way to the next display source, the other to the last. */
+            if (g && !strcmp(g, "swipe")) { printf("swipe %c\n", dx >= 0 ? '+' : '-'); fflush(stdout); }
+            else if (g) { printf("%s\n", g); fflush(stdout); }
             fprintf(stderr, "glass-tap: touch on %s: %d finger(s), %ld ms, %d units of travel, %+d along: %s\n", p->path, p->maxf, dt,
                     p->travel, dx, g ? g : why);
             p->down = 0;

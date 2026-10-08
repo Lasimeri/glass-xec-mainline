@@ -72,16 +72,18 @@
 #                               what glass-tap made of each, from its log
 #   glass camera-display [on|off|toggle]
 #                               the camera window here and the Glass's display
-#                               together (off while it charges); a swipe on the
+#                               together (off while it charges); a two-finger tap on the
 #                               touchpad toggles them; alone, says which
-#   glass display [SOURCE|next|status]
+#   glass display [SOURCE|next|prev|status]
 #                               what the Glass's display shows: camera (the
 #                               camera window's heads-up display), camera-local
 #                               (the camera straight on the Glass), a desktop
 #                               monitor (DP-1, DP-2...), follow, window,
 #                               console or off; alone, a menu (fzf in a
 #                               terminal, kdialog from the launcher); a
-#                               two-finger tap on the touchpad runs `next`
+#                               swipe on the touchpad runs next or prev, a
+#                               two-finger tap turns the stream on or off
+#   glass swipe-forward [+|-]   which way along the pad is a forward swipe
 #   glass btop                  btop on the Glass, its battery meter on the
 #                               fuel gauge (a window when run without a
 #                               terminal)
@@ -395,7 +397,7 @@ case "$verb" in
         }
         unit glass-viewd "Google Glass: the desktop's monitor and a shell on the Glass whenever it is up (glass-xec)"
         unit glass-audio "Google Glass: the desktop's sound on the Glass while it is on the network (glass-xec)"
-        unit glass-tap "Google Glass: touchpad gestures, a tap the voice mute, a swipe the camera stream and display (glass-xec)"
+        unit glass-tap "Google Glass: touchpad gestures, a tap the voice mute, two fingers the stream on or off, a swipe the next or last display source (glass-xec)"
         unit glass-camera "Google Glass: the camera in its own window whenever the Glass is up (glass-xec)"
         # The Glass's own screen in a window: glass-fbgrab there sends the
         # rows that changed, out/glass-fbview here keeps the picture (built
@@ -779,8 +781,9 @@ case "$verb" in
                 say "display source: ${current:-not chosen yet, so the camera heads-up display when the camera window runs}; panel $d"
                 exit 0
                 ;;
-            next)
+            next | prev)
                 cycle=$(for s in $sources; do case "$s" in window | off) ;; *) echo "$s" ;; esac; done)
+                [ "$want" = prev ] && cycle=$(echo "$cycle" | tac)
                 want=$(echo "$cycle" | awk -v c="$current" 'NR == 1 { f = $0 } p { print; done = 1; exit } $0 == c { p = 1 } END { if (!done) print f }')
                 ;;
             menu)
@@ -861,7 +864,7 @@ case "$verb" in
     camera-display)
         # The camera window here and the Glass's display, on or off together:
         # off while it charges (the streams draw nearly all a desktop USB port
-        # gives: docs/daily-use.md, Letting it charge). A swipe on the touchpad
+        # gives: docs/daily-use.md, Letting it charge). A two-finger tap on the touchpad
         # runs `toggle` (scripts/glass-tap.sh), which goes by the display, as
         # the person wearing it sees it: lit means off, dark means on. The
         # camera's service is enabled or disabled with it, so the choice
@@ -886,7 +889,7 @@ case "$verb" in
                 off)
                     systemctl --user stop glass-viewd.service glass-camera.service 2> /dev/null || true
                     [ -n "$lit" ] && ssh_glass 'pkill -x glass-camera; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
-                    say "display off (glass display: $chosen comes back on the next swipe)"
+                    say "display off (glass display: $chosen comes back on the next two-finger tap)"
                     exit 0
                     ;;
                 *) die "glass camera-display [on|off|toggle]" ;;
@@ -925,6 +928,18 @@ case "$verb" in
         # The USB cable unplugged from the Glass's side and back, timing
         # every session's move to home Wi-Fi (scripts/glass-unplug-test.sh).
         exec scripts/glass-unplug-test.sh "${1:-1}" "${2:-40}"
+        ;;
+
+    swipe-forward)
+        # Which way along the touchpad counts as forward for a swipe (the next
+        # display source; the other way is the one before): + or -, as
+        # glass-tap logs the travel ("+707 along"). Alone, says which.
+        f=$top/out/glass-swipe-forward
+        case "${1:-}" in
+            + | -) mkdir -p "$top/out"; echo "$1" > "$f"; say "a swipe of $1 travel is forward (the next source)" ;;
+            "") say "forward is a swipe of $(head -c 1 "$f" 2> /dev/null || echo +) travel (glass swipe-forward + or - to change)" ;;
+            *) die "glass swipe-forward [+|-]" ;;
+        esac
         ;;
 
     addr)
