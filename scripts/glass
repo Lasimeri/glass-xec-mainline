@@ -74,6 +74,14 @@
 #                               the camera window here and the Glass's display
 #                               together (off while it charges); a swipe on the
 #                               touchpad toggles them; alone, says which
+#   glass display [SOURCE|next|status]
+#                               what the Glass's display shows: camera (the
+#                               camera window's heads-up display), camera-local
+#                               (the camera straight on the Glass), a desktop
+#                               monitor (DP-1, DP-2...), follow, window,
+#                               console or off; alone, a menu (fzf in a
+#                               terminal, kdialog from the launcher); a
+#                               two-finger tap on the touchpad runs `next`
 #   glass btop                  btop on the Glass, its battery meter on the
 #                               fuel gauge (a window when run without a
 #                               terminal)
@@ -426,7 +434,10 @@ case "$verb" in
         launcher glass-audio-toggle "Glass audio: automatic switching on/off" toggle "Turns automatic sound switching to the Google Glass on or off (off for development: nothing moves by itself)"
         launcher glass-audio-glass "Glass audio: sound to the Glass" glass "The desktop's sound and the voice to the Google Glass, back to the stereo by itself when it leaves"
         launcher glass-audio-stereo "Glass audio: sound to the stereo" stereo "The desktop's sound and the voice to the stereo, and it stays there"
-        say "launchers: $l/glass-audio-toggle.desktop, glass-audio-glass.desktop, glass-audio-stereo.desktop"
+        # The display's source: a menu (kdialog) from the launcher.
+        printf '[Desktop Entry]\nType=Application\nName=Glass display\nComment=%s\nExec=%s display\nIcon=video-display\nTerminal=false\nCategories=AudioVideo;Video;\n' \
+            "What the Google Glass shows: the camera, a monitor, the console or nothing" "$top/scripts/glass" > "$l/glass-display.desktop"
+        say "launchers: $l/glass-audio-toggle.desktop, glass-audio-glass.desktop, glass-audio-stereo.desktop, glass-display.desktop"
         for s in glass-viewd glass-audio glass-tap glass-camera glass-display; do
             say "$s: $(systemctl --user is-active "$s.service")"
         done
@@ -725,6 +736,128 @@ case "$verb" in
         tail -n +$((n + 1)) "$r" 2> /dev/null | grep -E 'touch on|tap:|toggled|camera window' >&2 || say "nothing: no gesture reached glass-tap.sh"
         ;;
 
+    display)
+        # What the Glass's display shows, one source at a time (the choice in
+        # out/glass-source, kept across logins):
+        #   camera        the camera window's heads-up display (glass-camera.service:
+        #                 the processed camera picture, 12/s)
+        #   camera-local  the camera straight onto the Glass's screen, nothing over
+        #                 the network (the camera window here is switched off: one
+        #                 process holds the camera)
+        #   MONITOR       a desktop monitor (glass-viewd.service, glass-view.sh)
+        #   follow        the primary monitor 1:1 around the pointer
+        #   window        the Glass screen, a nested desktop (glass-screen.sh)
+        #   console       the Glass's own console
+        #   off           the display dark, every stream to it stopped
+        # Alone: a menu (fzf in a terminal; kdialog from the launcher entry that
+        # setup-desktop writes). `next` goes to the following source, skipping
+        # window and off (a two-finger tap on the touchpad, glass-tap.sh), and
+        # says so on the desktop. The heads-up display yields to any other choice
+        # (glass-camera.sh reads out/glass-source).
+        panel=/sys/devices/platform/omapdss/manager2/panel-notle-dpi/enabled
+        srcf=$top/out/glass-source
+        desk=${DESK:-$HOME/deskpilot/target/release/desk}
+        monitors=$("$desk" outputs 2> /dev/null | awk -F: '/^[A-Z]/ && !/workspace/ {print $1}' || true)
+        sources="camera camera-local $(echo $monitors) follow window console off"
+        current=$(head -n 1 "$srcf" 2> /dev/null || true)
+        label() {
+            case "$1" in
+                camera) echo "camera: the camera window's heads-up display" ;;
+                camera-local) echo "camera on the Glass alone (camera window here off)" ;;
+                follow) echo "the primary monitor 1:1 around the pointer" ;;
+                window) echo "the Glass screen (a nested desktop window)" ;;
+                console) echo "the Glass's own console" ;;
+                off) echo "display off" ;;
+                *) echo "monitor $1" ;;
+            esac
+        }
+        want=${1:-menu}
+        case "$want" in
+            status)
+                lit=$(ssh_glass "cat $panel" < /dev/null 2> /dev/null) || lit=""
+                case "$lit" in 1) d=lit ;; 0) d=dark ;; *) d="unknown (the Glass does not answer)" ;; esac
+                say "display source: ${current:-not chosen yet, so the camera heads-up display when the camera window runs}; panel $d"
+                exit 0
+                ;;
+            next)
+                cycle=$(for s in $sources; do case "$s" in window | off) ;; *) echo "$s" ;; esac; done)
+                want=$(echo "$cycle" | awk -v c="$current" 'NR == 1 { f = $0 } p { print; done = 1; exit } $0 == c { p = 1 } END { if (!done) print f }')
+                ;;
+            menu)
+                if [ -t 0 ] && [ -t 1 ] && command -v fzf > /dev/null; then
+                    want=$(for s in $sources; do printf '%-13s %s%s\n' "$s" "$(label "$s")" "$([ "$s" = "$current" ] && echo '   (now)')"; done |
+                        fzf --prompt 'Glass display > ' --height 12 --reverse --no-sort | awk '{print $1}') || exit 0
+                elif command -v kdialog > /dev/null; then
+                    items=()
+                    for s in $sources; do items+=("$s" "$(label "$s")$([ "$s" = "$current" ] && echo '   (now)')"); done
+                    want=$(kdialog --title "Glass display" --menu "What the Glass shows (now: ${current:-camera})" "${items[@]}") || exit 0
+                else
+                    die "glass display SOURCE (no fzf or kdialog for a menu): $sources"
+                fi
+                [ -n "$want" ] || exit 0
+                ;;
+        esac
+        case " $sources " in *" $want "*) ;; *) die "no display source '$want' (one of: $sources)" ;; esac
+        lit=$(ssh_glass "cat $panel" < /dev/null 2> /dev/null) || die "the Glass does not answer at $GLASS_IP"
+        # On the Glass: the local camera view (glass-camera -y, matched by its
+        # arguments in /proc: a pkill -f pattern also matches this session's
+        # own shell, whose command line holds the same words) and any decoder
+        # still drawing; the camera window's glass-camera (no -y) stays while
+        # the camera window here runs, and goes when it does not (an orphan of
+        # a cut session holds the camera).
+        # Only the chosen source's feed runs (the person, 2026-10-08: "the
+        # feeds are only loaded when switched to"): the camera window and its
+        # heads-up display stop for any other choice, the Glass screen (a
+        # nested desktop) for anything but window; the monitor stream and the
+        # local camera are started by their own choice below and stopped by
+        # every other.
+        if [ "$want" != camera ]; then
+            systemctl --user disable --now glass-camera.service 2>&1 | grep -v "^Removed" >&2 || true
+        fi
+        if [ "$want" != window ]; then
+            "$top/scripts/glass-screen.sh" stop > /dev/null 2>&1 || true
+        fi
+        quiet='for p in $(pidof glass-camera); do tr "\0" " " < /proc/$p/cmdline | grep -q " -y" && kill $p; done; p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi; true'
+        systemctl --user is-active --quiet glass-camera.service || quiet="pkill -x glass-camera; $quiet"
+        unblank='echo 0 > /sys/class/graphics/fb0/blank'
+        mkdir -p "$top/out"
+        echo "$want" > "$srcf"
+        case "$want" in
+            camera)
+                systemctl --user disable --now glass-viewd.service 2>&1 | grep -v "^Removed" >&2 || true
+                ssh_glass "$quiet; $unblank" < /dev/null || die "the Glass did not take the change"
+                systemctl --user enable --now glass-camera.service 2>&1 | grep -v "^Created symlink" >&2 || true
+                ;;
+            camera-local)
+                systemctl --user disable --now glass-viewd.service glass-camera.service 2>&1 | grep -v "^Removed" >&2 || true
+                ssh_glass "pkill -x glass-camera; $quiet; sleep 1; $unblank; setsid sh -c 'exec /usr/local/bin/glass-camera -y -w 640 -h 360 -r 15 2> /run/glass/local-camera.log | /usr/local/bin/glass-fb -n -r 15 2>> /run/glass/local-camera.log' < /dev/null > /dev/null 2>&1 &" < /dev/null ||
+                    die "the Glass did not take the change"
+                ;;
+            console | off)
+                systemctl --user disable --now glass-viewd.service 2>&1 | grep -v "^Removed" >&2 || true
+                if [ "$want" = console ]; then
+                    ssh_glass "$quiet; $unblank; echo 0 > /sys/devices/platform/omapdss/overlay1/enabled" < /dev/null || die "the Glass did not take the change"
+                else
+                    ssh_glass "$quiet; echo 1 > /sys/class/graphics/fb0/blank" < /dev/null || die "the Glass did not take the change"
+                fi
+                ;;
+            *)
+                # A monitor, follow or window: the monitor stream, which takes the
+                # display from the heads-up display, started again on the new choice.
+                if [ "$want" = window ]; then
+                    "$top/scripts/glass-screen.sh" start > /dev/null || die "the Glass screen did not start (scripts/glass-screen.sh start)"
+                fi
+                echo "$want" > "$top/out/glass-output"
+                ssh_glass "$quiet; $unblank" < /dev/null || die "the Glass did not take the change"
+                systemctl --user enable glass-viewd.service 2>&1 | grep -v "^Created symlink" >&2 || true
+                systemctl --user restart glass-viewd.service
+                ;;
+        esac
+        msg="the Glass shows: $(label "$want")"
+        say "$msg"
+        command -v notify-send > /dev/null && notify-send -a Glass -i video-display "Glass display" "$msg" 2> /dev/null || true
+        ;;
+
     camera-display)
         # The camera window here and the Glass's display, on or off together:
         # off while it charges (the streams draw nearly all a desktop USB port
@@ -738,6 +871,27 @@ case "$verb" in
         # camera frame), so with no glass-fb running it is switched off.
         panel=/sys/devices/platform/omapdss/manager2/panel-notle-dpi/enabled
         lit=$(ssh_glass "cat $panel" < /dev/null 2> /dev/null) || lit=""
+        # A source other than the camera window chosen (glass display): on
+        # brings that source back, off darkens the display and stops what
+        # feeds it, the choice kept for the next on.
+        chosen=$(head -n 1 "$top/out/glass-source" 2> /dev/null || true)
+        if [ -n "$chosen" ] && [ "$chosen" != camera ] && [ "${1:-status}" != status ]; then
+            w=$1
+            [ "$w" = toggle ] && { [ "$lit" = 1 ] && w=off || w=on; }
+            case "$w" in
+                on)
+                    [ "$chosen" = off ] && chosen=camera
+                    exec "$top/scripts/glass" display "$chosen"
+                    ;;
+                off)
+                    systemctl --user stop glass-viewd.service glass-camera.service 2> /dev/null || true
+                    [ -n "$lit" ] && ssh_glass 'pkill -x glass-camera; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
+                    say "display off (glass display: $chosen comes back on the next swipe)"
+                    exit 0
+                    ;;
+                *) die "glass camera-display [on|off|toggle]" ;;
+            esac
+        fi
         cam=off; systemctl --user is-active --quiet glass-camera.service && cam=on
         want=${1:-status}
         if [ "$want" = toggle ]; then

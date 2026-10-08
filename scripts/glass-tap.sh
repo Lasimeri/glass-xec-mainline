@@ -8,7 +8,9 @@
 #   a swipe   the camera stream and the Glass's display on or off together
 #             (glass camera-display toggle: off while it charges); the
 #             display going dark or lit is the answer
-#   a two-finger tap is reported and logged, and does nothing.
+#   a two-finger tap  the display's next source (glass display next: camera,
+#             the camera alone, each monitor, follow, console); a desktop
+#             notification names it
 #
 # The desktop holds an ssh session to the Glass and reads glass-tap's lines
 # (tools/glass-tap, on the Glass at /usr/local/bin/glass-tap); the Glass
@@ -44,6 +46,12 @@ while :; do
                     echo "glass-tap: $(date +%T) swipe: camera stream and display toggled" >> "$log"
                     GLASS_IP=$addr setsid flock -n "$run/glass-camera-display.lock" \
                         "$top/scripts/glass" camera-display toggle < /dev/null >> "$log" 2>&1 9>&- &
+                    ;;
+                tap2)
+                    # Two fingers: the display's next source (glass display next).
+                    echo "glass-tap: $(date +%T) two-finger tap: next display source" >> "$log"
+                    GLASS_IP=$addr setsid flock -n "$run/glass-display.lock" \
+                        "$top/scripts/glass" display next < /dev/null >> "$log" 2>&1 9>&- &
                     ;;
                 tap)
                     "$toggle" --toggle

@@ -47,6 +47,29 @@ The USB cable is a charger and a fallback, never the working path: every session
 
 `scripts/glass btop` opens btop on the Glass (Alpine's package, kept by `glass update`): in the terminal it is run from, or in its own Konsole window. Its battery meter, top right of the CPU box, reads the fuel gauge (`bq27520-0`): the charge, an arrow while charging, the time left or to full, and the watts in or out; config `/root/.config/btop/btop.conf` on the Glass (2 s updates for the 300 MHz CPU).
 
+## What the display shows
+
+One source at a time, chosen with `glass display` (a menu: fzf in a
+terminal, a list from the launcher's "Glass display" entry), or by name:
+
+| source | the Glass shows |
+| --- | --- |
+| `camera` | the camera window's heads-up display (the processed camera picture, 12/s) |
+| `camera-local` | the camera straight onto its screen, nothing over the network (the camera window here is off) |
+| `DP-1`, `DP-2`... | a desktop monitor (the monitor stream, glass-viewd) |
+| `follow` | the primary monitor one to one around the pointer |
+| `window` | the Glass screen, a nested desktop (scripts/glass-screen.sh) |
+| `console` | its own shell |
+| `off` | nothing, the display dark |
+
+A **two-finger tap** on the touchpad goes to the next source (camera,
+camera alone, each monitor, follow, console; a desktop notification names
+it); `glass display status` says which is chosen. Only the chosen source's
+feed runs: choosing another stops the camera window, the monitor stream,
+the local camera or the Glass screen, so nothing streams that is not shown.
+The choice is kept (out/glass-source). A swipe still turns the display off
+and on, and on brings back the chosen source.
+
 ## Where the sound goes
 
 On the desktop, `scripts/glass audio` (instant; also in the application launcher and KRunner as "Glass audio: ..."):

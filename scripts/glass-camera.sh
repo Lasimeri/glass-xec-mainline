@@ -88,6 +88,10 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
         local enc=$! addr
         while kill -0 $enc 2> /dev/null; do
             if systemctl --user is-active --quiet glass-viewd.service; then sleep 5; continue; fi
+            # Another source chosen for the display (glass display): the
+            # heads-up display waits until the camera is chosen again.
+            src=$(head -n 1 "$top/out/glass-source" 2> /dev/null || true)
+            if [ -n "$src" ] && [ "$src" != camera ]; then sleep 2; continue; fi
             addr=$("$top/scripts/glass" addr 2> /dev/null) || addr=""
             if [ -n "$addr" ]; then
                 echo "glass-camera: $(date +%T) heads-up display on $addr" >> "$log"
