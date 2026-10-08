@@ -41,7 +41,7 @@ mkfifo "$fifo" || exit 1
 # cam079's inside view): the Glass cannot, so the desktop's RTX 3090 Ti
 # does it all. Its video decoder (NVDEC, ffmpeg -hwaccel cuda) turns the
 # H.264 into pictures, facetrack finds faces with YuNet through OpenCL on
-# the same card, locks a reticle on the nearest ("SUBJECT: ADMIN"), lifts
+# the same card, locks a reticle on the nearest ("SUBJECT: USER"), lifts
 # low light, and hands the annotated picture to mpv with the same scalers
 # and FSR as the other camera windows, on the camera screen. Like the
 # other cameras it keeps a status line a second for the Phi Stream's
@@ -63,7 +63,7 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
             FACETRACK_STATUS="$feeds/glass" FACETRACK_CAM=glass FACETRACK_SNAP="$snapdir/latest-glass.jpg" \
                 OPENCV_THREAD_POOL_ACTIVE_WAIT_WORKER=0 OPENCV_THREAD_POOL_ACTIVE_WAIT_MAIN=0 \
                 OPENCV_THREAD_POOL_ACTIVE_WAIT_PAUSE_LIMIT=0 OPENCV_FOR_THREADS_NUM="${FACETRACK_THREADS:-4}" \
-                "$ft" - "$w" "$h" "SUBJECT: ADMIN" 2>> "$log" |
+                "$ft" - "$w" "$h" "SUBJECT: USER" 2>> "$log" |
             mpv --really-quiet --title="079 glass" --profile=low-latency --untimed --no-cache \
                 --scale=ewa_lanczossharp --cscale=ewa_lanczossharp --dscale=mitchell \
                 --correct-downscaling=yes --linear-downscaling=yes --sigmoid-upscaling=yes \
