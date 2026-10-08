@@ -716,7 +716,9 @@ case "$verb" in
         # the person wearing it sees it: lit means off, dark means on. The
         # camera's service is enabled or disabled with it, so the choice
         # holds across logins here; the display is blanked through omapfb,
-        # which disables the panel (panel-notle-dpi/enabled reads 0).
+        # which disables the panel (panel-notle-dpi/enabled reads 0); unblanking
+        # can bring back the video overlay with its last picture (a frozen
+        # camera frame), so with no glass-fb running it is switched off.
         panel=/sys/devices/platform/omapdss/manager2/panel-notle-dpi/enabled
         lit=$(ssh_glass "cat $panel" < /dev/null 2> /dev/null) || lit=""
         cam=off; systemctl --user is-active --quiet glass-camera.service && cam=on
@@ -727,7 +729,7 @@ case "$verb" in
         case "$want" in
             on)
                 [ -n "$lit" ] || die "the Glass does not answer at $GLASS_IP"
-                ssh_glass 'echo 0 > /sys/class/graphics/fb0/blank' < /dev/null || die "the display did not turn on"
+                ssh_glass 'echo 0 > /sys/class/graphics/fb0/blank; pidof glass-fb > /dev/null || echo 0 > /sys/devices/platform/omapdss/overlay1/enabled' < /dev/null || die "the display did not turn on"
                 systemctl --user enable --now glass-camera.service 2>&1 | grep -v "^Created symlink" >&2 || true
                 say "camera window and display on"
                 ;;

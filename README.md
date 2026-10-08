@@ -14,7 +14,7 @@ Linux for **Google Glass Explorer Edition XE-C** (the 2 GB revision, TI OMAP4430
 | Tailscale | the Glass on the tailnet as `glass`, reachable from any network | `tailscaled` |
 | display | the 640x360 Himax HX7309 LCoS (312 color fields/s): an idle shell with status lines, and the desktop's monitor at 12 frames/s (NVENC H.264 over ssh, decoded on the Glass, flipped by the display controller: 0 dropped, 0 late) | `glass-console`, `glass-view.sh`, `glass-fb` |
 | sound | the desktop's sound and the voice on the bone conduction speaker (the TWL6040's Earphone output), no restarts, no underruns; Opus over the tailnet | `glass-play`, `glass audio` |
-| camera | the OV5680 through the Ducati (TI's DOMX over rpmsg, spoken in C), H.264 from the Ducati's own encoder, in a window on the desktop or on the Glass's own screen | `glass camera`, `glass local-camera on`, [docs/ducati-omx.md](docs/ducati-omx.md) |
+| camera | the OV5680 through the Ducati (TI's DOMX over rpmsg, spoken in C), H.264 from the Ducati's own encoder, in a window on the desktop with face tracking on its GPU; the same processed picture back on the Glass's display at 15 frames/s | `glass camera`, `glass local-camera on`, [docs/ducati-omx.md](docs/ducati-omx.md) |
 | touchpad | a tap turns the camera window and the display on or off together (off while it charges), a two-finger tap toggles the desktop's voice mute | `glass-tap`, `glass camera-display` |
 | battery | the bq27520 fuel gauge: the charge on every streamed frame, on the status lines and in `glass btop`; charging while plugged in | `glass-fb`, `glass btop` |
 | the Glass's screen on the desktop | the rows that changed, every 250 ms, in a window | `glass-fbgrab`, `glass-fbview` |
@@ -127,7 +127,7 @@ scripts/glass update          # after every change here; nothing flashed
 | `dts/` | the Glass device trees (copied into the kernel tree at build) |
 | `userland/initramfs/`, `userland/rootfs/` | `/init`, inittab, rcS, `glass-*` commands |
 | `tools/glass-fb/`, `glass-console/`, `glass-play/`, `glass-camera/`, `glass-tap/`, `glass-fbgrab/` | the Glass's own tools in C: frames onto the display, the idle shell, sound, the camera through the Ducati, the touchpad, the screen read back |
-| `tools/glass-fbview/`, `glass-viewport/` | desktop tools in C: the Glass's screen in a window, a pixel-perfect region of a monitor |
+| `tools/glass-fbview/`, `glass-viewport/`, `glass-tee/` | desktop tools in C: the Glass's screen in a window, a pixel-perfect region of a monitor, the camera's processed stream split between its window and the Glass's display |
 | `tools/bootimg/` | Android boot image v0 in C |
 | `tools/nopython/` | the `python*` shims that log and fail |
 | `docs/daily-use.md` | what starts by itself, how to reach the Glass, the camera, the command for each setting, keeping it current |

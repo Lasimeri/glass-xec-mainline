@@ -57,6 +57,39 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
     screen=${CAM079_SCREEN:-$("$t079/state079" get screen DP-2 2> /dev/null || echo DP-2)}
     fsr=()
     [ -f "$t079/shaders/FSR.glsl" ] && fsr=(--glsl-shaders="$t079/shaders/FSR.glsl")
+    # The same processed picture on the Glass's own display, its heads-up
+    # display (GLASS_CAMERA_HUD=0: the window only). glass-tee passes
+    # facetrack's stream (YUV4MPEG2) to the window untouched and frame by
+    # frame to the display's encoder, which a slow or broken path to the Glass
+    # never holds up. NVENC makes 640x360 H.264 at HUD_KBPS (1000) kbit/s;
+    # on the Glass its ffmpeg decodes and
+    # glass-fb shows it on the video overlay at the camera's rate, the
+    # console coming back when it stops. The monitor stream (glass-viewd)
+    # keeps the display while it runs; the heads-up display waits for it.
+    tee=$top/build/glass-tee
+    if [ ! -x "$tee" ] || [ "$top/tools/glass-tee/glass-tee.c" -nt "$tee" ]; then
+        mkdir -p "$top/build"
+        gcc -O2 -o "$tee" "$top/tools/glass-tee/glass-tee.c" -lpthread || exit 1
+    fi
+    hkb=${HUD_KBPS:-1000}
+    takeover='p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi;'
+    hudcmd="$takeover /usr/local/bin/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -flags low_delay -threads 2 -thread_type slice -f mpegts -i pipe:0 -fps_mode passthrough -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b 1"
+    hud() {   # stdin: frames from glass-tee's fd 3
+        exec 6< <(exec ffmpeg -hide_banner -loglevel error -f yuv4mpegpipe -r "$fps" -i pipe:0 \
+            -vf scale=640:360:flags=area,format=yuv420p -c:v h264_nvenc -preset p1 -tune ull -profile:v baseline -slices 2 -rc cbr -b:v "${hkb}k" \
+            -bufsize "$((hkb * 1000 / fps))" -g "$((fps * 2))" -bf 0 -zerolatency 1 -delay 0 \
+            -f mpegts -muxdelay 0 -muxpreload 0 -flush_packets 1 pipe:1 2>> "$log")
+        local enc=$! addr
+        while kill -0 $enc 2> /dev/null; do
+            if systemctl --user is-active --quiet glass-viewd.service; then sleep 5; continue; fi
+            addr=$("$top/scripts/glass" addr 2> /dev/null) || addr=""
+            if [ -n "$addr" ]; then
+                echo "glass-camera: $(date +%T) heads-up display on $addr" >> "$log"
+                GLASS_IP=$addr "$top/scripts/glass" ssh "$hudcmd" <&6 > /dev/null 2>> "$log"
+            fi
+            sleep 2
+        done
+    }
     (
         ffmpeg -hide_banner -loglevel error -nostdin -hwaccel cuda -fflags nobuffer -flags low_delay \
             -probesize 32 -analyzeduration 0 -f h264 -i - -fps_mode passthrough -f rawvideo -pix_fmt bgr24 - < "$fifo" 2>> "$log" |
@@ -64,6 +97,7 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
                 OPENCV_THREAD_POOL_ACTIVE_WAIT_WORKER=0 OPENCV_THREAD_POOL_ACTIVE_WAIT_MAIN=0 \
                 OPENCV_THREAD_POOL_ACTIVE_WAIT_PAUSE_LIMIT=0 OPENCV_FOR_THREADS_NUM="${FACETRACK_THREADS:-4}" \
                 "$ft" - "$w" "$h" "SUBJECT: USER" 2>> "$log" |
+            if [ "${GLASS_CAMERA_HUD:-1}" != 0 ]; then "$tee" 3> >(hud) 2>> "$log"; else cat; fi |
             mpv --really-quiet --title="079 glass" --profile=low-latency --untimed --no-cache \
                 --scale=ewa_lanczossharp --cscale=ewa_lanczossharp --dscale=mitchell \
                 --correct-downscaling=yes --linear-downscaling=yes --sigmoid-upscaling=yes \
