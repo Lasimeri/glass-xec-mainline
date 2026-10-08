@@ -114,6 +114,7 @@ scripts/glass camera-display off
 | look at | for |
 | --- | --- |
 | `scripts/glass status` | the whole state first |
+| `scripts/glass touch tap` (`tap2`, `swipe`, `hold`) | the gestures without a finger: a virtual pad on the Glass plays them as the real one sends them, and the tap log says what each touch was taken for; with a real finger the same log lines (`touch on /dev/input/event3: ...`) say why a touch was or was not a tap |
 | `$XDG_RUNTIME_DIR/glass-viewd.log` | the stream: a line every 5 s with frames shown, dropped, late |
 | `$XDG_RUNTIME_DIR/glass-audio.log` | the sound: glass-play's delay, corrections and underruns every 30 s |
 | `/var/log/glass-wifi.log` on the Glass | Wi-Fi joins and drops, the address taken, the watchdog's actions, kept across reboots |

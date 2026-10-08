@@ -126,7 +126,7 @@ scripts/glass update          # after every change here; nothing flashed
 | `config/glass.config` | the mainline kernel config fragment |
 | `dts/` | the Glass device trees (copied into the kernel tree at build) |
 | `userland/initramfs/`, `userland/rootfs/` | `/init`, inittab, rcS, `glass-*` commands |
-| `tools/glass-fb/`, `glass-console/`, `glass-play/`, `glass-camera/`, `glass-tap/`, `glass-fbgrab/` | the Glass's own tools in C: frames onto the display, the idle shell, sound, the camera through the Ducati, the touchpad, the screen read back |
+| `tools/glass-fb/`, `glass-console/`, `glass-play/`, `glass-camera/`, `glass-tap/`, `glass-touch/`, `glass-fbgrab/` | the Glass's own tools in C: frames onto the display, the idle shell, sound, the camera through the Ducati, the touchpad's gestures, a gesture emulator, the screen read back |
 | `tools/glass-fbview/`, `glass-viewport/`, `glass-tee/` | desktop tools in C: the Glass's screen in a window, a pixel-perfect region of a monitor, the camera's processed stream split between its window and the Glass's display |
 | `tools/bootimg/` | Android boot image v0 in C |
 | `tools/nopython/` | the `python*` shims that log and fail |

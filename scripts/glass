@@ -67,6 +67,9 @@
 #                               size, at 15/s and 768 kbit/s)
 #   glass local-camera [on|off] the camera on the Glass's own screen
 #                               (nothing over the network)
+#   glass touch GESTURE...      the gesture emulator: tap, tap2, swipe or hold
+#                               played on the Glass as its pad sends them;
+#                               what glass-tap made of each, from its log
 #   glass camera-display [on|off|toggle]
 #                               the camera window here and the Glass's display
 #                               together (off while it charges); a tap on the
@@ -353,7 +356,7 @@ case "$verb" in
         cp -a userland/initramfs/. "$stage/"
         cp -a userland/rootfs/. "$stage/"
         mkdir -p "$stage/usr/local/src" "$stage/usr/share/glass"
-        for t in glass-fb glass-tap glass-console glass-play glass-camera glass-fbgrab; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-fbgrab; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
         cp -a tools/glass-camera/omx "$stage/usr/local/src/"   # the OMX headers glass-camera is built with
         font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
         if [ -f "$font" ]; then gzip -dc "$font" > "$stage/usr/share/glass/console.psf"; else say "no $font (kbd): the console font is not sent"; fi
@@ -706,6 +709,20 @@ case "$verb" in
                 ;;
             *) die "glass local-camera [on|off]" ;;
         esac
+        ;;
+
+    touch)
+        # The gesture emulator: glass-touch on the Glass plays the gestures
+        # through a virtual pad in the real pad's protocol, and the running
+        # glass-tap (and so this desktop's glass-tap.sh) takes them as a
+        # finger's; what it made of each touch is in the tap log.
+        [ $# -gt 0 ] || die "glass touch tap|tap2|swipe|hold ..."
+        r=${XDG_RUNTIME_DIR:-/tmp}/glass-tap.log
+        n=$(wc -l < "$r" 2> /dev/null || echo 0)
+        ssh_glass "/usr/local/bin/glass-touch $*" < /dev/null || die "glass-touch did not run (glass update installs it)"
+        sleep 1
+        say "the tap log since:"
+        tail -n +$((n + 1)) "$r" 2> /dev/null | grep -E 'touch on|tap:|toggled|camera window' >&2 || say "nothing: no gesture reached glass-tap.sh"
         ;;
 
     camera-display)

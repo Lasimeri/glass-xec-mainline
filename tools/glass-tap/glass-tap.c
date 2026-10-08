@@ -6,22 +6,34 @@
  *   tap2       two fingers down and up within TAP2_MS, neither moving more
  *              than that (Glass's own two-finger tap)
  *
+ * and a line on stderr for every touch (fingers, time, travel, verdict), so
+ * a gesture that was not taken says why.
+ *
  * Built on the Glass (gcc from Alpine), installed as /usr/local/bin/glass-tap.
  * The desktop reads it over ssh (scripts/glass-tap.sh): a tap turns the
  * camera window and the Glass's display on or off together (glass
- * camera-display toggle), a two-finger tap toggles the voice mute, the same
- * as the number pad's period.
+ * camera-display toggle), a two-finger tap toggles the voice mute.
  *
- * The pad reports by multi-touch protocol B (rmi_f11.c in Google's kernel:
- * input_mt_slot and input_mt_report_slot_state when type_a is off): a slot
- * per finger, a tracking id at each touch and -1 at its lift, so each
- * finger's travel is measured from its own first position.
+ * The pad speaks multi-touch protocol A (board-notle.c sets type_a = 1 for
+ * rmi_f11; the device has no ABS_MT_SLOT): every report lists the fingers
+ * down, each as ABS_MT_TRACKING_ID (its index), position and the rest, then
+ * SYN_MT_REPORT; SYN_REPORT ends the report. A lifted finger is simply not
+ * listed any more (Google's note in rmi_f11.c: "the input device should
+ * simply stop sending data"), and when the last one lifts one empty report
+ * comes (SYN_MT_REPORT, SYN_REPORT). So a touch begins at the first report
+ * with a finger and ends at the first without one.
  *
- *   glass-tap [/dev/input/eventN]     default: the device named sensor00fn11
+ * Also read: any device named "glass-touch", the gesture emulator
+ * (tools/glass-touch: `glass touch tap` from the desktop), which plays the
+ * same protocol; the devices are looked for again every 2 s, so one that
+ * appears later is read too.
+ *
+ *   glass-tap [/dev/input/eventN]     default: every pad and emulator
  */
-#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,69 +43,135 @@
 
 #define TAP_MS 300
 #define TAP2_MS 400   /* two fingers seldom land and lift at one instant */
-#define SLOTS 10      /* DEFAULT_MAX_ABS_MT_TRACKING_ID in rmi_f11.c */
+#define IDS 10        /* DEFAULT_MAX_ABS_MT_TRACKING_ID in rmi_f11.c */
+#define PADS 4
 
-static int find_pad(char *path, size_t n) {
+struct pad {
+    int fd, slop;
+    char path[32];
+    /* the report being read */
+    int has, id, cx, cy, hx, hy, frame;
+    /* the touch */
+    int down, maxf, moved, travel;
+    long t0;
+    int x0[IDS], y0[IDS], seen[IDS];
+};
+static struct pad pads[PADS];
+static int npads;
+static long last_scan;   /* ms, monotonic: devices looked for every 2 s */
+
+/* Event time in ms; the field names of newer headers (input_event_sec). */
+static long ms(const struct input_event *e) { return (long) e->input_event_sec * 1000L + (long) e->input_event_usec / 1000; }
+
+static int add_pad(const char *path) {
+    for (int i = 0; i < npads; i++) if (!strcmp(pads[i].path, path)) return 0;
+    if (npads == PADS) return -1;
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return -1;
+    struct pad *p = &pads[npads];
+    memset(p, 0, sizeof *p);
+    p->fd = fd; p->id = -1;
+    snprintf(p->path, sizeof p->path, "%s", path);
+    struct input_absinfo ax;
+    int span = 1000;
+    if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &ax) == 0 && ax.maximum > ax.minimum) span = ax.maximum - ax.minimum;
+    p->slop = span / 20;
+    char name[64] = "";
+    ioctl(fd, EVIOCGNAME(sizeof name), name);
+    fprintf(stderr, "glass-tap: %s (%s), a tap is under %d ms (two fingers %d ms) and %d units of travel\n", path, name, TAP_MS, TAP2_MS, p->slop);
+    npads++;
+    return 0;
+}
+
+/* Every device named as the pad or the emulator, not yet open. */
+static void scan(void) {
     for (int i = 0; i < 32; i++) {
-        char p[64], name[128] = "";
+        char p[32], name[64] = "";
         snprintf(p, sizeof p, "/dev/input/event%d", i);
         int fd = open(p, O_RDONLY);
         if (fd < 0) continue;
         ioctl(fd, EVIOCGNAME(sizeof name), name);
         close(fd);
-        if (!strcmp(name, "sensor00fn11")) { snprintf(path, n, "%s", p); return 0; }
+        if (!strcmp(name, "sensor00fn11") || !strcmp(name, "glass-touch")) add_pad(p);
     }
-    return -1;
 }
 
-/* Event time in ms; the field names of newer headers (input_event_sec). */
-static long ms(const struct input_event *e) { return (long) e->input_event_sec * 1000L + (long) e->input_event_usec / 1000; }
-
-int main(int argc, char **argv) {
-    char path[64];
-    if (argc > 1) snprintf(path, sizeof path, "%s", argv[1]);
-    else if (find_pad(path, sizeof path)) { fprintf(stderr, "glass-tap: no touchpad (sensor00fn11)\n"); return 1; }
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) { perror(path); return 1; }
-    struct input_absinfo ax;
-    int span = 1000;
-    if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &ax) == 0 && ax.maximum > ax.minimum) span = ax.maximum - ax.minimum;
-    int slop = span / 20;
-    int slot = 0;
-    if (ioctl(fd, EVIOCGABS(ABS_MT_SLOT), &ax) == 0 && ax.value >= 0 && ax.value < SLOTS) slot = ax.value;
-    fprintf(stderr, "glass-tap: %s, a tap is under %d ms (two fingers %d ms) and %d units of travel\n", path, TAP_MS, TAP2_MS, slop);
-
-    /* One touch: from the first finger down to the last finger up. */
-    int down = 0, fingers = 0, maxfingers = 0, moved = 0;
-    int x0[SLOTS], y0[SLOTS], hx[SLOTS] = { 0 }, hy[SLOTS] = { 0 };
-    long t0 = 0;
-    struct input_event e;
-    while (read(fd, &e, sizeof e) == sizeof e) {
-        if (e.type == EV_ABS) {
-            if (e.code == ABS_MT_SLOT) {
-                slot = e.value >= 0 && e.value < SLOTS ? e.value : SLOTS - 1;
-            } else if (e.code == ABS_MT_TRACKING_ID) {
-                if (e.value >= 0) {
-                    if (!down) { down = 1; t0 = ms(&e); maxfingers = 0; moved = 0; }
-                    if (++fingers > maxfingers) maxfingers = fingers;
-                    hx[slot] = hy[slot] = 0;
-                } else if (fingers > 0) {
-                    fingers--;
-                }
-            } else if (e.code == ABS_MT_POSITION_X) {
-                if (!hx[slot]) { x0[slot] = e.value; hx[slot] = 1; }
-                else if (abs(e.value - x0[slot]) >= slop) moved = 1;
-            } else if (e.code == ABS_MT_POSITION_Y) {
-                if (!hy[slot]) { y0[slot] = e.value; hy[slot] = 1; }
-                else if (abs(e.value - y0[slot]) >= slop) moved = 1;
-            }
-        } else if (e.type == EV_SYN && e.code == SYN_REPORT && down && fingers == 0) {
-            long dt = ms(&e) - t0;
-            if (!moved && maxfingers == 1 && dt < TAP_MS) printf("tap\n");
-            else if (!moved && maxfingers == 2 && dt < TAP2_MS) printf("tap2\n");
-            fflush(stdout);
-            down = 0;
+/* One finger's part of a report ends (SYN_MT_REPORT, or SYN_REPORT after a
+ * finger without its own MT sync). */
+static void contact_end(struct pad *p, long t) {
+    if (!p->has) return;
+    if (!p->down) {
+        p->down = 1; p->t0 = t; p->maxf = 0; p->moved = 0; p->travel = 0;
+        memset(p->seen, 0, sizeof p->seen);
+    }
+    int id = p->id >= 0 && p->id < IDS ? p->id : (p->frame < IDS ? p->frame : IDS - 1);
+    p->frame++;
+    if (p->hx && p->hy) {
+        if (!p->seen[id]) { p->x0[id] = p->cx; p->y0[id] = p->cy; p->seen[id] = 1; }
+        else {
+            int d = abs(p->cx - p->x0[id]);
+            if (abs(p->cy - p->y0[id]) > d) d = abs(p->cy - p->y0[id]);
+            if (d > p->travel) p->travel = d;
+            if (d >= p->slop) p->moved = 1;
         }
     }
-    return 0;
+    p->has = 0; p->id = -1; p->hx = p->hy = 0;
+}
+
+static void event(struct pad *p, const struct input_event *e) {
+    if (e->type == EV_ABS && e->code >= ABS_MT_TOUCH_MAJOR && e->code <= ABS_MT_PRESSURE) {
+        p->has = 1;
+        if (e->code == ABS_MT_TRACKING_ID) p->id = e->value;
+        else if (e->code == ABS_MT_POSITION_X) { p->cx = e->value; p->hx = 1; }
+        else if (e->code == ABS_MT_POSITION_Y) { p->cy = e->value; p->hy = 1; }
+    } else if (e->type == EV_SYN && e->code == SYN_MT_REPORT) {
+        contact_end(p, ms(e));
+    } else if (e->type == EV_SYN && e->code == SYN_REPORT) {
+        contact_end(p, ms(e));
+        if (p->frame > 0) {
+            if (p->frame > p->maxf) p->maxf = p->frame;
+        } else if (p->down) {
+            long dt = ms(e) - p->t0;
+            const char *g = NULL;
+            if (!p->moved && p->maxf == 1 && dt < TAP_MS) g = "tap";
+            else if (!p->moved && p->maxf == 2 && dt < TAP2_MS) g = "tap2";
+            if (g) { printf("%s\n", g); fflush(stdout); }
+            fprintf(stderr, "glass-tap: touch on %s: %d finger(s), %ld ms, %d units of travel: %s\n", p->path, p->maxf, dt, p->travel,
+                    g ? g : p->moved ? "moved, no tap" : dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no tap");
+            p->down = 0;
+        }
+        p->frame = 0;
+    }
+}
+
+int main(int argc, char **argv) {
+    int fixed = argc > 1;
+    if (fixed) { if (add_pad(argv[1])) { perror(argv[1]); return 1; } }
+    else scan();
+    if (!npads) { fprintf(stderr, "glass-tap: no touchpad (sensor00fn11)\n"); return 1; }
+    for (;;) {
+        struct pollfd pf[PADS];
+        for (int i = 0; i < npads; i++) { pf[i].fd = pads[i].fd; pf[i].events = POLLIN; pf[i].revents = 0; }
+        int r = poll(pf, (nfds_t) npads, 2000);
+        if (r < 0 && errno != EINTR) return 1;
+        for (int i = 0; i < npads; i++) {
+            if (!(pf[i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
+            struct input_event e;
+            ssize_t n;
+            while ((n = read(pads[i].fd, &e, sizeof e)) == (ssize_t) sizeof e) event(&pads[i], &e);
+            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
+                /* gone (the emulator ended): forget it */
+                fprintf(stderr, "glass-tap: %s gone\n", pads[i].path);
+                close(pads[i].fd);
+                pads[i] = pads[--npads];
+                pf[i] = pf[npads];
+                i--;
+            }
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        long now = (long) ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+        if (!fixed && now - last_scan >= 2000) { scan(); last_scan = now; }
+        if (!npads) { fprintf(stderr, "glass-tap: no touchpad left\n"); return 1; }
+    }
 }
