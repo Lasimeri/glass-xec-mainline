@@ -428,10 +428,13 @@ case "$verb" in
             done
         done
         systemctl --user daemon-reload
-        # Always on: the sound, the gestures, the Glass screen window, and the
+        # Always on: the sound, the gestures, and the
         # source at login, which turns on the camera window or the monitor
         # stream when it is the one chosen (only the chosen feed runs).
-        systemctl --user enable --now glass-audio.service glass-tap.service glass-display.service glass-source.service 2>&1 | grep -v "^Created symlink" >&2 || true
+        systemctl --user enable --now glass-audio.service glass-tap.service glass-source.service 2>&1 | grep -v "^Created symlink" >&2 || true
+        # The Glass's screen in a window here (glass-display.service) is written
+        # but not enabled (the person, 2026-10-08: no framebuffer stream to the
+        # PC); systemctl --user start glass-display shows it once.
         # The sound's switches in the application launcher (and KRunner:
         # type "glass audio"); a keyboard shortcut can be given to any of
         # them in System Settings, Shortcuts.
