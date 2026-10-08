@@ -167,3 +167,40 @@ The output is Annex-B (start codes), Constrained Baseline; the first buffer
 carries SPS and PPS (flag CODECCONFIG), then an IDR. Measured 2026-10-07 at
 960x540, 15/s, 768 kbit/s: 15.0 frames/s, 762 to 779 kbit/s, the A9 copying
 only the bitstream.
+
+## The decoder (not working yet)
+
+`tools/glass-decode` (2026-10-07), kept for the next attempt; not built or
+used by anything (the heads-up display decodes in software).
+
+- `OMX.TI.DUCATI1.VIDEO.DECODER` (TI's one video decoder; `.H264D` is not a
+  component name, 0x80001003), told its codec by SetParameter
+  `OMX_IndexParamStandardComponentRole` "video_decoder.avc"; the firmware's
+  H264D is 01.00.00.13. Port 0 bitstream in (TILER 1D, one frame a buffer),
+  port 1 pictures out (TILER 2D NV12, as the camera's).
+- Before any stream: input AVC profile 0x8, level 0x1000 (4.1), 1 reference;
+  output 640x368 (from a 640x368 input), stride 4096, slice height 368,
+  colour 0x27, `OMX_TI_IndexParam2DBufferAllocDimension` 768x480, 2949120
+  bytes, at least 3 buffers. `OMX_TI_IndexParamUseEnhancedPortReconfig`
+  (which TI's Android proxy sets) is unsupported here (0x8000101a).
+- The first SPS brings a port change (port 1, nData2 0; trace1
+  `omx_video_decoder_utils.c:[1236] Dynamic port reconfiguration
+  triggered`), at least 7 buffers. The reconfiguration as Android does it
+  (PortDisable, every buffer back, FreeBuffer, new buffers, PortEnable,
+  FillThisBuffer) completes and the firmware makes its codec again
+  (`2.Codec Create`).
+- Then every frame fails in process() with extended error 0x4000, 0 bytes
+  consumed: with the SPS and PPS as a configuration buffer, inline before
+  the key frame, or not sent again; with NVENC's stream (level 2.2, 3
+  references, VUI) and with this Ducati's own encoder output (level 4.1, 1
+  reference) alike. The decoder then asks for another reconfiguration
+  (`[1812] Number of buffers allocated are less than required ... Current
+  nBufferCountActual = 7, New nBufferCountMin = 7`, `[1551]`).
+- A PortDisable in that state, or the client ending then, crashes the
+  firmware: `Exception occurred at (PC) = 00000000`, usage fault INVSTATE
+  in the `OMX_Video_Decoder` task. remoteproc recovers it in about 2 s and
+  glass-camera reconnects by itself; ten crashes on 2026-10-07, every one
+  recovered.
+- Not tried yet: the trace at info level (`traceLevel` at PA 0xf5fb98b4 is
+  0x2), output frame dimensions with the codec's padding as TI's proxy
+  derives them, Android's single gralloc NV12 buffer layout.
