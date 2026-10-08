@@ -57,14 +57,18 @@ done
 # 4. Tools: built from the staged source when it differs from the one the
 # binary was built from (kept in /usr/local/src after a good build only).
 built=""
-for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-fbgrab; do
+for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-decode glass-fbgrab; do
     src=./usr/local/src/$t.c
     [ -f "$src" ] || continue
-    if cmp -s "$src" "/usr/local/src/$t.c" && [ -x "/usr/local/bin/$t" ]; then continue; fi
+    # The DOMX programs also follow the wire they share (omx/domx.h).
+    dx=""
+    case $t in glass-camera|glass-decode) dx=./usr/local/src/omx/domx.h ;; esac
+    if cmp -s "$src" "/usr/local/src/$t.c" && [ -x "/usr/local/bin/$t" ] &&
+        { [ -z "$dx" ] || cmp -s "$dx" "/usr/local/src/$t.domx.h"; }; then continue; fi
     case $t in
         glass-fb) flags="-O3 -mfpu=neon -mfloat-abi=hard"; libs="-lpthread" ;;
         glass-play) flags="-O2"; libs="" ;;
-        glass-camera) flags="-O2 -I./usr/local/src/omx"; libs="-lpthread" ;;
+        glass-camera|glass-decode) flags="-O2 -I./usr/local/src/omx"; libs="-lpthread" ;;
         *) flags="-O2"; libs="" ;;
     esac
     say "building $t"
@@ -72,6 +76,7 @@ for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera gl
         mkdir -p /usr/local/bin /usr/local/src
         mv "/tmp/$t.new" "/usr/local/bin/$t.new" && mv "/usr/local/bin/$t.new" "/usr/local/bin/$t"
         cp "$src" "/usr/local/src/$t.c"
+        [ -z "$dx" ] || cp "$dx" "/usr/local/src/$t.domx.h"
         built="$built $t"
     else
         say "$t did not build (see /tmp/$t.build.log); the old one stays"
