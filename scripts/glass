@@ -344,7 +344,7 @@ case "$verb" in
                 sed -n 's/.*glass-fb: \([0-9.]*\) frames\/s shown.*, \([0-9]*\) late slots.*/\1 frames\/s, \2 late slots in the last 5 s/p')
             printf "  %-12s %s\n" stream "${last:-no report yet}"
             n=0; sup=""
-            for s in glass-viewd glass-audio glass-tap glass-camera glass-display; do
+            for s in glass-viewd glass-audio glass-tap glass-camera glass-display glass-source; do
                 sup="$sup${sup:+, }$s $(systemctl --user is-active "$s.service" 2> /dev/null)"
                 [ "$(systemctl --user is-enabled "$s.service" 2> /dev/null)" = enabled ] && n=$((n + 1))
             done
@@ -410,7 +410,12 @@ case "$verb" in
         printf '[Unit]\nDescription=%s\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n[Service]\nExecStart=/bin/sh -c %s\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n' \
             "Google Glass: its screen in a window on the desktop (glass-xec)" \
             "'$top/scripts/glass ssh /usr/local/bin/glass-fbgrab | $fv \"Glass display\"'" > "$u/glass-display.service"
-        say "services: $u/glass-viewd.service, glass-audio.service, glass-tap.service, glass-camera.service, glass-display.service"
+        # The display's source at login (glass display restore): the one last
+        # chosen, back once the Glass answers, so only its feed starts; until
+        # the Glass answers, tried again every 30 s.
+        printf '[Unit]\nDescription=%s\nAfter=graphical-session.target network-online.target\nPartOf=graphical-session.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=%s display restore\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=graphical-session.target\n' \
+            "Google Glass: the display source last chosen, at login (glass-xec)" "$top/scripts/glass" > "$u/glass-source.service"
+        say "services: $u/glass-viewd.service, glass-audio.service, glass-tap.service, glass-camera.service, glass-display.service, glass-source.service"
         # What these replace: the login autostart entries, and any supervisor
         # running outside its service (from an autostart entry or a shell),
         # ended with its process group, so each runs once, under systemd.
@@ -423,7 +428,10 @@ case "$verb" in
             done
         done
         systemctl --user daemon-reload
-        systemctl --user enable --now glass-viewd.service glass-audio.service glass-tap.service glass-camera.service glass-display.service 2>&1 | grep -v "^Created symlink" >&2 || true
+        # Always on: the sound, the gestures, the Glass screen window, and the
+        # source at login, which turns on the camera window or the monitor
+        # stream when it is the one chosen (only the chosen feed runs).
+        systemctl --user enable --now glass-audio.service glass-tap.service glass-display.service glass-source.service 2>&1 | grep -v "^Created symlink" >&2 || true
         # The sound's switches in the application launcher (and KRunner:
         # type "glass audio"); a keyboard shortcut can be given to any of
         # them in System Settings, Shortcuts.
@@ -440,7 +448,7 @@ case "$verb" in
         printf '[Desktop Entry]\nType=Application\nName=Glass display\nComment=%s\nExec=%s display\nIcon=video-display\nTerminal=false\nCategories=AudioVideo;Video;\n' \
             "What the Google Glass shows: the camera, a monitor, the console or nothing" "$top/scripts/glass" > "$l/glass-display.desktop"
         say "launchers: $l/glass-audio-toggle.desktop, glass-audio-glass.desktop, glass-audio-stereo.desktop, glass-display.desktop"
-        for s in glass-viewd glass-audio glass-tap glass-camera glass-display; do
+        for s in glass-viewd glass-audio glass-tap glass-camera glass-display glass-source; do
             say "$s: $(systemctl --user is-active "$s.service")"
         done
         [ -f "$HOME/.ssh/glass_ed25519" ] || say "missing ~/.ssh/glass_ed25519, the key the Glass trusts: ssh-keygen -t ed25519 -N '' -f ~/.ssh/glass_ed25519, then rebuild the images (or add the .pub to the Glass's /root/.ssh/authorized_keys)"
@@ -780,6 +788,13 @@ case "$verb" in
                 case "$lit" in 1) d=lit ;; 0) d=dark ;; *) d="unknown (the Glass does not answer)" ;; esac
                 say "display source: ${current:-not chosen yet, so the camera heads-up display when the camera window runs}; panel $d"
                 exit 0
+                ;;
+            restore)
+                # At login (glass-source.service): the remembered source back
+                # once the Glass answers, so only its feed runs; a Glass that
+                # does not answer yet fails this, and the unit tries again.
+                ssh_glass true < /dev/null 2> /dev/null || die "the Glass does not answer yet"
+                want=${current:-camera}
                 ;;
             next | prev)
                 cycle=$(for s in $sources; do case "$s" in window | off) ;; *) echo "$s" ;; esac; done)
