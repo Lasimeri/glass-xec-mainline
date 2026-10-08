@@ -3,16 +3,18 @@
  *
  *   tap        one finger down and up within TAP_MS, moving less than a
  *              twentieth of the pad
+ *   swipe      one finger along the pad, at least a fifth of its length
+ *              either way, down and up within SWIPE_MS
  *   tap2       two fingers down and up within TAP2_MS, neither moving more
- *              than that (Glass's own two-finger tap)
+ *              than a twentieth (Glass's own two-finger tap)
  *
  * and a line on stderr for every touch (fingers, time, travel, verdict), so
  * a gesture that was not taken says why.
  *
  * Built on the Glass (gcc from Alpine), installed as /usr/local/bin/glass-tap.
- * The desktop reads it over ssh (scripts/glass-tap.sh): a tap turns the
- * camera window and the Glass's display on or off together (glass
- * camera-display toggle), a two-finger tap toggles the voice mute.
+ * The desktop reads it over ssh (scripts/glass-tap.sh): a tap toggles the
+ * voice mute (the microphone), a swipe turns the camera stream and the
+ * Glass's display on or off together (glass camera-display toggle).
  *
  * The pad speaks multi-touch protocol A (board-notle.c sets type_a = 1 for
  * rmi_f11; the device has no ABS_MT_SLOT): every report lists the fingers
@@ -43,18 +45,19 @@
 
 #define TAP_MS 300
 #define TAP2_MS 400   /* two fingers seldom land and lift at one instant */
+#define SWIPE_MS 1000
 #define IDS 10        /* DEFAULT_MAX_ABS_MT_TRACKING_ID in rmi_f11.c */
 #define PADS 4
 
 struct pad {
-    int fd, slop;
+    int fd, slop, span;
     char path[32];
     /* the report being read */
     int has, id, cx, cy, hx, hy, frame;
     /* the touch */
     int down, maxf, moved, travel;
     long t0;
-    int x0[IDS], y0[IDS], seen[IDS];
+    int x0[IDS], y0[IDS], lx[IDS], ly[IDS], seen[IDS];
 };
 static struct pad pads[PADS];
 static int npads;
@@ -75,7 +78,7 @@ static int add_pad(const char *path) {
     struct input_absinfo ax;
     int span = 1000;
     if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &ax) == 0 && ax.maximum > ax.minimum) span = ax.maximum - ax.minimum;
-    p->slop = span / 20;
+    p->slop = span / 20; p->span = span;
     char name[64] = "";
     ioctl(fd, EVIOCGNAME(sizeof name), name);
     fprintf(stderr, "glass-tap: %s (%s), a tap is under %d ms (two fingers %d ms) and %d units of travel\n", path, name, TAP_MS, TAP2_MS, p->slop);
@@ -114,8 +117,16 @@ static void contact_end(struct pad *p, long t) {
             if (d > p->travel) p->travel = d;
             if (d >= p->slop) p->moved = 1;
         }
+        p->lx[id] = p->cx; p->ly[id] = p->cy;
     }
     p->has = 0; p->id = -1; p->hx = p->hy = 0;
+}
+
+/* How far the finger ended along the pad from where it landed (x, signed);
+ * one finger's touch, so the one finger seen. */
+static int along(const struct pad *p) {
+    for (int i = 0; i < IDS; i++) if (p->seen[i]) return p->lx[i] - p->x0[i];
+    return 0;
 }
 
 static void event(struct pad *p, const struct input_event *e) {
@@ -132,12 +143,16 @@ static void event(struct pad *p, const struct input_event *e) {
             if (p->frame > p->maxf) p->maxf = p->frame;
         } else if (p->down) {
             long dt = ms(e) - p->t0;
-            const char *g = NULL;
+            int dx = p->maxf == 1 ? along(p) : 0;
+            const char *g = NULL, *why = "no gesture";
             if (!p->moved && p->maxf == 1 && dt < TAP_MS) g = "tap";
             else if (!p->moved && p->maxf == 2 && dt < TAP2_MS) g = "tap2";
+            else if (p->moved && p->maxf == 1 && dt < SWIPE_MS && abs(dx) >= p->span / 5) g = "swipe";
+            else if (p->moved) why = p->maxf == 1 && dt < SWIPE_MS ? "moved, too short for a swipe" : "moved, no gesture";
+            else why = dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no gesture";
             if (g) { printf("%s\n", g); fflush(stdout); }
-            fprintf(stderr, "glass-tap: touch on %s: %d finger(s), %ld ms, %d units of travel: %s\n", p->path, p->maxf, dt, p->travel,
-                    g ? g : p->moved ? "moved, no tap" : dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no tap");
+            fprintf(stderr, "glass-tap: touch on %s: %d finger(s), %ld ms, %d units of travel, %+d along: %s\n", p->path, p->maxf, dt,
+                    p->travel, dx, g ? g : why);
             p->down = 0;
         }
         p->frame = 0;

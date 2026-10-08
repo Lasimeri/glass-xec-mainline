@@ -9,11 +9,11 @@
  * SYN_REPORT; a lift is the fingers no longer listed, the last one's an
  * empty report. glass-tap reads devices of this name as it reads the pad.
  *
- *   glass-touch GESTURE...       tap | tap2 | swipe | hold, played in order
+ *   glass-touch GESTURE...       tap | swipe | tap2 | hold, played in order
  *
  *   tap     one finger, 96 ms, still            glass-tap: "tap"
  *   tap2    two fingers, 120 ms, still          glass-tap: "tap2"
- *   swipe   one finger across 40% of the pad    nothing (it moved)
+ *   swipe   one finger across 40% of the pad    glass-tap: "swipe"
  *   hold    one finger, 720 ms                  nothing (too long)
  *
  * Reports come every REPORT_MS. The device is made 2.5 s before the first

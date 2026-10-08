@@ -67,12 +67,12 @@
 #                               size, at 15/s and 768 kbit/s)
 #   glass local-camera [on|off] the camera on the Glass's own screen
 #                               (nothing over the network)
-#   glass touch GESTURE...      the gesture emulator: tap, tap2, swipe or hold
+#   glass touch GESTURE...      the gesture emulator: tap, swipe, tap2 or hold
 #                               played on the Glass as its pad sends them;
 #                               what glass-tap made of each, from its log
 #   glass camera-display [on|off|toggle]
 #                               the camera window here and the Glass's display
-#                               together (off while it charges); a tap on the
+#                               together (off while it charges); a swipe on the
 #                               touchpad toggles them; alone, says which
 #   glass btop                  btop on the Glass, its battery meter on the
 #                               fuel gauge (a window when run without a
@@ -387,7 +387,7 @@ case "$verb" in
         }
         unit glass-viewd "Google Glass: the desktop's monitor and a shell on the Glass whenever it is up (glass-xec)"
         unit glass-audio "Google Glass: the desktop's sound on the Glass while it is on the network (glass-xec)"
-        unit glass-tap "Google Glass: a tap on the touchpad toggles the voice mute (glass-xec)"
+        unit glass-tap "Google Glass: touchpad gestures, a tap the voice mute, a swipe the camera stream and display (glass-xec)"
         unit glass-camera "Google Glass: the camera in its own window whenever the Glass is up (glass-xec)"
         # The Glass's own screen in a window: glass-fbgrab there sends the
         # rows that changed, out/glass-fbview here keeps the picture (built
@@ -434,7 +434,7 @@ case "$verb" in
         [ -x "${DESK:-$HOME/deskpilot/target/release/desk}" ] || say "missing the desk tool (screen capture): cargo build --release in ~/deskpilot"
         command -v gst-launch-1.0 > /dev/null || say "missing GStreamer: install gstreamer, gst-plugin-pipewire, gst-plugins-bad"
         command -v tailscale > /dev/null || say "no tailscale here: the Glass is then reachable only on this network and by USB"
-        [ -x "$HOME/tts079/ptt079" ] || say "no ~/tts079/ptt079: a tap on the Glass has no mute to toggle"
+        [ -x "$HOME/tts079/ptt079" ] || say "no ~/tts079/ptt079: a tap on the Glass has no microphone mute to toggle"
         ;;
 
     root-boot)
@@ -728,7 +728,7 @@ case "$verb" in
     camera-display)
         # The camera window here and the Glass's display, on or off together:
         # off while it charges (the streams draw nearly all a desktop USB port
-        # gives: docs/daily-use.md, Letting it charge). A tap on the touchpad
+        # gives: docs/daily-use.md, Letting it charge). A swipe on the touchpad
         # runs `toggle` (scripts/glass-tap.sh), which goes by the display, as
         # the person wearing it sees it: lit means off, dark means on. The
         # camera's service is enabled or disabled with it, so the choice
