@@ -61,23 +61,29 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
     # display (GLASS_CAMERA_HUD=0: the window only). glass-tee passes
     # facetrack's stream (YUV4MPEG2) to the window untouched and frame by
     # frame to the display's encoder, which a slow or broken path to the Glass
-    # never holds up. NVENC makes 640x360 H.264 at HUD_KBPS (1000) kbit/s;
-    # on the Glass its ffmpeg decodes and
-    # glass-fb shows it on the video overlay at the camera's rate, the
-    # console coming back when it stops. The monitor stream (glass-viewd)
-    # keeps the display while it runs; the heads-up display waits for it.
+    # never holds up. NVENC makes 640x360 H.264 at HUD_FPS (12, the user's
+    # rate for the display) and HUD_KBPS (500) kbit/s; on the Glass its ffmpeg
+    # decodes without the deblocking filter (HUD_SKIP_LOOP=none puts it back)
+    # and glass-fb shows it on the video overlay, the console coming back
+    # when it stops. The Glass's CPU, both cores at its 300 MHz thermal cap,
+    # measured 2026-10-07 interleaved twice: 15/s, filter, 1000 kbit/s 55
+    # and 57 %; no filter 45, 45; at 12/s 42, 41; at 500 kbit/s 33, 34 (the
+    # decoder 32.6 to 14.6 %); the camera alone 11 (at 600 MHz), idle 6. The
+    # monitor stream (glass-viewd) keeps the display while it runs; the
+    # heads-up display waits for it.
     tee=$top/build/glass-tee
     if [ ! -x "$tee" ] || [ "$top/tools/glass-tee/glass-tee.c" -nt "$tee" ]; then
         mkdir -p "$top/build"
         gcc -O2 -o "$tee" "$top/tools/glass-tee/glass-tee.c" -lpthread || exit 1
     fi
-    hkb=${HUD_KBPS:-1000}
+    hkb=${HUD_KBPS:-500}
+    hfps=${HUD_FPS:-12}   # the display's rate (the user: the display at 12 frames/s)
     takeover='p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi;'
-    hudcmd="$takeover /usr/local/bin/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -flags low_delay -threads 2 -thread_type slice -f mpegts -i pipe:0 -fps_mode passthrough -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b 1"
+    hudcmd="$takeover /usr/local/bin/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -flags low_delay -flags2 +fast -skip_loop_filter ${HUD_SKIP_LOOP:-all} -threads 2 -thread_type slice -f mpegts -i pipe:0 -fps_mode passthrough -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $hfps -b 1"
     hud() {   # stdin: frames from glass-tee's fd 3
         exec 6< <(exec ffmpeg -hide_banner -loglevel error -f yuv4mpegpipe -r "$fps" -i pipe:0 \
             -vf scale=640:360:flags=area,format=yuv420p -c:v h264_nvenc -preset p1 -tune ull -profile:v baseline -slices 2 -rc cbr -b:v "${hkb}k" \
-            -bufsize "$((hkb * 1000 / fps))" -g "$((fps * 2))" -bf 0 -zerolatency 1 -delay 0 \
+            -r "$hfps" -bufsize "$((hkb * 1000 / hfps))" -g "$((hfps * 2))" -bf 0 -zerolatency 1 -delay 0 \
             -f mpegts -muxdelay 0 -muxpreload 0 -flush_packets 1 pipe:1 2>> "$log")
         local enc=$! addr
         while kill -0 $enc 2> /dev/null; do

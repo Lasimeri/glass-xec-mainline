@@ -52,6 +52,9 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
 
 #ifndef OMAPFB_WAITFORVSYNC
 #define OMAPFB_WAITFORVSYNC _IO('O', 57)   /* linux/omapfb.h: OMAP_IO(57) */
@@ -139,25 +142,41 @@ static void *reader(void *arg) {
  * swscale's yuv420p to yuyv422 has no fast path on this build and cost
  * twice the decode (measured 2026-10-07: ffmpeg 83% against 40%). */
 static int i420, nv12;   /* -n: NV12 in (glass-camera -y), U and V interleaved */
+/* A line of 4:2:0 picture packed into YUYV: Y even, U, Y odd, V for each
+ * pair of pixels. With NEON, 16 pixels a step (vld2 splits the Y into even
+ * and odd, vst4 interleaves the four into 32 bytes): the packing was 5 % of
+ * both cores at 300 MHz in C (2026-10-07). u and v are the line's chroma
+ * (I420: two planes; NV12: one, interleaved, step 2). */
+static void pack_line(uint8_t *o, const uint8_t *y, const uint8_t *u, const uint8_t *v, int step, unsigned w) {
+    unsigned x = 0;
+#ifdef __ARM_NEON
+    for (; x + 16 <= w; x += 16) {
+        uint8x8x2_t yy = vld2_u8(y + x);
+        uint8x8x4_t q;
+        if (step == 2) { uint8x8x2_t c = vld2_u8(u + x); q.val[1] = c.val[0]; q.val[3] = c.val[1]; }
+        else { q.val[1] = vld1_u8(u + x / 2); q.val[3] = vld1_u8(v + x / 2); }
+        q.val[0] = yy.val[0]; q.val[2] = yy.val[1];
+        vst4_u8(o + 2 * x, q);
+    }
+#endif
+    for (; x + 1 < w; x += 2) {
+        o[2 * x] = y[x]; o[2 * x + 1] = u[x / 2 * step]; o[2 * x + 2] = y[x + 1]; o[2 * x + 3] = v[x / 2 * step];
+    }
+}
+
 static void pack_yuyv(unsigned char *dst, const unsigned char *src) {
     unsigned w = var.xres, h = var.yres;
     if (nv12) {
         const unsigned char *Y = src, *UV = src + (size_t) w * h;
         for (unsigned yy = 0; yy < h; yy++) {
-            const unsigned char *y = Y + (size_t) yy * w, *uv = UV + (size_t) (yy / 2) * w;
-            uint32_t *o = (uint32_t *) (dst + (size_t) yy * line);
-            for (unsigned x = 0; x < w / 2; x++)
-                o[x] = (uint32_t) y[2 * x] | ((uint32_t) uv[2 * x] << 8) | ((uint32_t) y[2 * x + 1] << 16) | ((uint32_t) uv[2 * x + 1] << 24);
+            const unsigned char *uv = UV + (size_t) (yy / 2) * w;
+            pack_line(dst + (size_t) yy * line, Y + (size_t) yy * w, uv, uv + 1, 2, w);
         }
         return;
     }
     const unsigned char *Y = src, *U = src + w * h, *V = U + (w / 2) * (h / 2);
-    for (unsigned yy = 0; yy < h; yy++) {
-        const unsigned char *y = Y + (size_t) yy * w, *u = U + (size_t) (yy / 2) * (w / 2), *vv = V + (size_t) (yy / 2) * (w / 2);
-        uint32_t *o = (uint32_t *) (dst + (size_t) yy * line);
-        for (unsigned x = 0; x < w / 2; x++)
-            o[x] = (uint32_t) y[2 * x] | ((uint32_t) u[x] << 8) | ((uint32_t) y[2 * x + 1] << 16) | ((uint32_t) vv[x] << 24);
-    }
+    for (unsigned yy = 0; yy < h; yy++)
+        pack_line(dst + (size_t) yy * line, Y + (size_t) yy * w, U + (size_t) (yy / 2) * (w / 2), V + (size_t) (yy / 2) * (w / 2), 1, w);
 }
 
 /* -y: the overlay on, at the page the driver was last panned to (show()
