@@ -104,6 +104,11 @@ if has "$built" glass-tap; then
     restarted="$restarted tap"
 fi
 if has "$changed" /usr/sbin/glass-wifi; then
+    # The watchdog loop runs the old script until it is restarted: up
+    # starts a new one when the old is gone.
+    w=$(cat /run/glass-wifi-watch.pid 2> /dev/null || true)
+    [ -n "$w" ] && kill "$w" 2> /dev/null
+    rm -f /run/glass-wifi-watch.pid
     /usr/sbin/glass-wifi up > /dev/null 2>&1 && restarted="$restarted wifi-hook"
 fi
 if has "$changed" /etc/inittab; then

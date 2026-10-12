@@ -214,18 +214,53 @@ case "${1:-}" in
         # itself down for 20 s (the driver turned a hung radio off): Wi-Fi
         # restarted at once. Not
         # joined for 180 s and nothing refused: Wi-Fi restarted (down, up).
+        # Joined, but the gateway no longer answering (ping, else ARP) for 30 s when it
+        # had on this join: Wi-Fi restarted. The radio can stall silently
+        # with wpa_supplicant still COMPLETED: 2026-10-11 18:55-19:02, after
+        # a camera start, 7 minutes of "no route to host" (ARP to the
+        # gateway failing) and the Glass off every path, nothing logged. A
+        # gateway still silent after one such restart is logged and left
+        # alone until it answers again (no restart loop on an access point
+        # that stops answering ARP).
         echo $$ > /run/glass-wifi-watch.pid
         l=/var/log/wpa_supplicant.log
         down=0 seen=$(wc -l < "$l" 2> /dev/null || echo 0)
+        gwok=0 gwbad=0 gwkick=0 bssid=
         while :; do
             sleep 10
-            st=$(wpa_cli -i wlan0 status 2> /dev/null | sed -n 's/^wpa_state=//p')
+            s=$(wpa_cli -i wlan0 status 2> /dev/null)
+            st=$(echo "$s" | sed -n 's/^wpa_state=//p')
             if [ "$st" = COMPLETED ]; then
                 down=0
                 seen=$(wc -l < "$l" 2> /dev/null || echo 0)
+                b=$(echo "$s" | sed -n 's/^bssid=//p')
+                if [ "$b" != "$bssid" ]; then bssid=$b gwok=0 gwbad=0 gwkick=0; fi
                 if ! ip -4 addr show wlan0 | grep -q 'inet '; then
                     wlog "joined but no address: setting it again"
                     "$0" wlan0 CONNECTED
+                    continue
+                fi
+                gw=$(ip -4 route show default dev wlan0 2> /dev/null | awk '{ print $3; exit }')
+                [ -n "$gw" ] || continue
+                # Ping first (the phone's hotspot never answers busybox
+                # arping, 2026-10-11), ARP for an access point that drops
+                # ICMP; either answer is a live link.
+                if ping -c 1 -W 2 -I wlan0 "$gw" > /dev/null 2>&1 ||
+                    arping -q -c 1 -w 2 -I wlan0 "$gw" > /dev/null 2>&1; then
+                    [ $gwbad -ge 3 ] && wlog "the gateway $gw answers again"
+                    gwok=1 gwbad=0 gwkick=0
+                    continue
+                fi
+                [ $gwok = 1 ] || continue
+                gwbad=$((gwbad + 1))
+                if [ $gwbad = 3 ] && [ $gwkick = 0 ]; then
+                    wlog "joined but the gateway $gw silent for 30 s (the radio stalled): restarting Wi-Fi"
+                    "$0" down > /dev/null 2>&1
+                    sleep 2
+                    "$0" up > /dev/null 2>&1
+                    gwbad=0 gwkick=1
+                elif [ $gwbad = 3 ]; then
+                    wlog "the gateway $gw still silent after a restart: left alone until it answers"
                 fi
                 continue
             fi
