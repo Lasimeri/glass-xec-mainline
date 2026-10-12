@@ -37,6 +37,26 @@ radio() {
     # will not come up again after a change, seen 2026-10-07); the desktop
     # finds the Glass by it when the address changes (scripts/glass).
     ip link set wlan0 up || die "wlan0 did not come up (dmesg | grep -i -e dhd -e brcmf)"
+    # One MAC on every network, every boot and every restart: the kernel
+    # takes Google's address only when the bootloader passes
+    # androidboot.macaddr, which it does on some boots and not others, and
+    # bcmdhd otherwise uses the chip's own, so the router saw two devices
+    # taking turns at one address (2026-10-12). bcmdhd takes a new address
+    # only with the radio up ("MACID is overwritten"; down: "interface info
+    # not available"). The address is /etc/glass/wifi-mac; without one, the
+    # address of this first bring-up is kept there (write Google's address,
+    # from Settings > Device info under Android, to choose it).
+    mac=$(cat /etc/glass/wifi-mac 2> /dev/null || true)
+    if [ -z "$mac" ]; then
+        mkdir -p /etc/glass
+        mac=$(cat /sys/class/net/wlan0/address)
+        echo "$mac" > /etc/glass/wifi-mac
+    fi
+    if [ "$(cat /sys/class/net/wlan0/address)" != "$mac" ]; then
+        ip link set wlan0 address "$mac" 2> /dev/null
+        i=0
+        while [ "$(cat /sys/class/net/wlan0/address)" != "$mac" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+    fi
 }
 conf() {
     mkdir -p /etc/wpa_supplicant

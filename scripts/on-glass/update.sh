@@ -106,6 +106,12 @@ fi
 if has "$changed" /usr/sbin/glass-wifi; then
     # The watchdog loop runs the old script until it is restarted: up
     # starts a new one when the old is gone.
+    # The Wi-Fi address glass-wifi keeps, from the one in use now (set by
+    # an older glass-wifi) when none is kept yet.
+    if [ ! -s /etc/glass/wifi-mac ] && [ -r /sys/class/net/wlan0/address ]; then
+        mkdir -p /etc/glass
+        cat /sys/class/net/wlan0/address > /etc/glass/wifi-mac
+    fi
     w=$(cat /run/glass-wifi-watch.pid 2> /dev/null || true)
     [ -n "$w" ] && kill "$w" 2> /dev/null
     rm -f /run/glass-wifi-watch.pid

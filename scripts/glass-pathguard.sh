@@ -25,7 +25,15 @@ addr=${1:?ADDRESS} target=${2:?TARGET}
 lan=$(head -n 1 "$top/out/glass-ip" 2> /dev/null || true)
 tailnet() { case "$1" in 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) return 0 ;; esac; return 1; }
 usb() { case "$1" in 172.16.42.*) return 0 ;; esac; return 1; }
-answers() { ping -c 1 -W 1 "$1" > /dev/null 2>&1; }
+# Answers, and on this subnet with the Glass's MAC (out/glass-mac): with
+# DHCP at home an old address may be another device's.
+gmac=$(tr 'A-Z' 'a-z' < "$top/out/glass-mac" 2> /dev/null | head -n 1)
+answers() {
+    ping -c 1 -W 1 "$1" > /dev/null 2>&1 || return 1
+    [ -n "$gmac" ] || return 0
+    m=$(ip neigh show "$1" 2> /dev/null | awk '/lladdr/ { print tolower($5); exit }')
+    [ -z "$m" ] || [ "$m" = "$gmac" ]
+}
 ssh_port() { timeout 2 bash -c "exec 3<> /dev/tcp/$1/22" 2> /dev/null; }
 # This desktop's own address on the USB link: gone the moment the cable is.
 cable() { [ -n "$(ip -o -4 addr show to 172.16.42.0/24 2> /dev/null)" ]; }
