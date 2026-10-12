@@ -63,4 +63,12 @@ if [ -x /usr/sbin/tailscaled ]; then
         --socket=/run/tailscale/tailscaled.sock > /run/glass/tailscaled.log 2>&1 < /dev/null &
     log "tailscaled started"
 fi
+
+# The display source the desktop chose last (glass display), kept on the
+# Glass: the local camera view started again, or the display dark; the
+# other sources are streams the desktop restarts by itself.
+if [ -x /usr/sbin/glass-localcam ]; then
+    /usr/sbin/glass-localcam boot
+    log "display source: $(cat /etc/glass/display-source 2> /dev/null || echo 'not stored')"
+fi
 exit 0

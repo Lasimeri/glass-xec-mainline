@@ -1,0 +1,75 @@
+#!/bin/sh
+# glass-localcam: the camera straight onto the Glass's own screen, kept
+# running (the display source camera-local, chosen with the desktop's
+# `glass display`, kept in /etc/glass/display-source so it comes back at
+# boot without the desktop: rcS-rootfs runs `glass-localcam boot`).
+#   glass-localcam start   the supervisor (one), the view restarted 3 s
+#                          after it ends for as long as the source stays
+#                          camera-local
+#   glass-localcam stop    the supervisor and its view ended
+#   glass-localcam boot    the stored source applied at boot: camera-local
+#                          starts the view, off darkens the display
+#   glass-localcam status
+# glass-camera -y (NV12 from the Ducati's camera) into glass-fb -n (the
+# video overlay); log /run/glass/local-camera.log.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+src=/etc/glass/display-source
+pidf=/run/glass/localcam.pid
+log=/run/glass/local-camera.log
+mkdir -p /run/glass
+
+running() { [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2> /dev/null; }
+
+# The view's processes: glass-camera started with -y (the camera window's
+# glass-camera, without -y, is not this one's) and the glass-fb fed by it.
+view_pids() {
+    for p in $(pidof glass-camera); do
+        tr '\0' ' ' < /proc/$p/cmdline 2> /dev/null | grep -q ' -y' && echo "$p"
+    done
+    for p in $(pidof glass-fb); do
+        tr '\0' ' ' < /proc/$p/cmdline 2> /dev/null | grep -q ' -n' && echo "$p"
+    done
+}
+
+case "${1:-status}" in
+    start)
+        running && exit 0
+        setsid "$0" run < /dev/null > /dev/null 2>&1 &
+        ;;
+    run)
+        echo $$ > "$pidf"
+        trap 'kill $(view_pids) 2> /dev/null; rm -f "$pidf"; exit 0' TERM INT
+        while [ "$(cat "$src" 2> /dev/null)" = camera-local ]; do
+            echo 0 > /sys/class/graphics/fb0/blank
+            echo "glass-localcam: $(date '+%F %T') view started" >> "$log"
+            /usr/local/bin/glass-camera -y -w 640 -h 360 -r 15 2>> "$log" |
+                /usr/local/bin/glass-fb -n -r 15 2>> "$log" &
+            wait
+            echo "glass-localcam: $(date '+%F %T') view ended; again in 3 s" >> "$log"
+            sleep 3
+        done
+        rm -f "$pidf"
+        ;;
+    stop)
+        if running; then kill "$(cat "$pidf")" 2> /dev/null; fi
+        rm -f "$pidf"
+        p=$(view_pids)
+        [ -n "$p" ] && kill $p 2> /dev/null
+        sleep 1
+        p=$(view_pids)
+        [ -n "$p" ] && kill -9 $p 2> /dev/null
+        true
+        ;;
+    boot)
+        case "$(cat "$src" 2> /dev/null)" in
+            # 20 s in: Wi-Fi has joined by then (the camera's start has
+            # hung the Wi-Fi chip, 2026-10-07 and 10-11; not mid-join too).
+            camera-local) (sleep 20; "$0" start) < /dev/null > /dev/null 2>&1 & ;;
+            off) echo 1 > /sys/class/graphics/fb0/blank ;;
+        esac
+        ;;
+    status)
+        echo "source: $(cat "$src" 2> /dev/null || echo 'not stored'); supervisor $(running && echo running || echo stopped); view pids: $(view_pids | tr '\n' ' ')"
+        ;;
+    *) echo "glass-localcam start | stop | boot | status" >&2; exit 1 ;;
+esac

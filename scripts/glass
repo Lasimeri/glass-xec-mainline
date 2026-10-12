@@ -103,48 +103,59 @@ if [ "${1:-}" = audio ]; then shift; exec scripts/glass-audio.sh "${@:-status}";
 # The Glass's address: GLASS_IP; else the last Wi-Fi address seen
 # (out/glass-ip, written by glass-wifi-copy and by `glass ip`), else the
 # name "glass" when the router resolves it (the Glass announces it with a
-# DHCP lease), each if it answers a ping; else the USB link if it answers;
-# else its tailnet address; else the Glass by its MAC on this subnet; else
-# USB.
+# DHCP lease), each if it answers with the Glass's MAC; else the Glass by
+# its MAC on this subnet (a new DHCP address); else the USB link if it
+# answers; else its tailnet address; else USB.
 given_ip=${GLASS_IP:-}   # set by the caller: a fixed path (glass camera follows the Glass otherwise)
 GLASS_IP=${GLASS_IP:-}
 if [ -z "$GLASS_IP" ]; then
-    # The remembered address first (on home Wi-Fi a fixed one, glass-wifi
-    # static), then the router's name; each only if it answers (the router
-    # keeps naming an old lease after the Glass moved to a fixed address).
+    # An address on this subnet is the Glass only if the MAC behind it is
+    # the Glass's (out/glass-mac; glass-wifi pins it on the Glass): with
+    # DHCP on home Wi-Fi an old address may be another device's by now.
+    gmac=$(tr 'A-Z' 'a-z' < out/glass-mac 2> /dev/null | head -n 1)
+    is_glass() {
+        ping -c 1 -W 1 "$1" > /dev/null 2>&1 || return 1
+        [ -n "$gmac" ] || return 0
+        m=$(ip neigh show "$1" 2> /dev/null | awk '/lladdr/ { print tolower($5); exit }')
+        [ -z "$m" ] || [ "$m" = "$gmac" ]
+    }
+    # The remembered address first, then the router's name for the Glass
+    # (its DHCP lease), each only if it is the Glass.
     if [ -s out/glass-ip ]; then
         last=$(head -n 1 out/glass-ip)
-        ping -c 1 -W 1 "$last" > /dev/null 2>&1 && GLASS_IP=$last
+        is_glass "$last" && GLASS_IP=$last
     fi
     if [ -z "$GLASS_IP" ]; then
         n=$(getent ahostsv4 glass 2> /dev/null | awk 'NR == 1 { print $1 }' || true)
-        if [ -n "$n" ] && ping -c 1 -W 1 "$n" > /dev/null 2>&1; then GLASS_IP=$n; fi
+        if [ -n "$n" ] && is_glass "$n"; then GLASS_IP=$n; echo "$n" > out/glass-ip; fi
     fi
-    # The last address went quiet: the USB link if it is there; else the
-    # Glass on the tailnet (tailscaled on the Glass, named "glass"; the
-    # phone's hotspot, anywhere else), the desktop's tailscale giving the
-    # address, no DNS needed; else the Glass by its Wi-Fi MAC (out/glass-mac)
-    # in the neighbour table after one round of pings over the desktop's own
-    # subnet (about a second, 254 pings: last, as the supervisors ask every
-    # few seconds while the Glass is away).
-    usb=0
-    [ -z "$GLASS_IP" ] && ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && usb=1
-    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && command -v tailscale > /dev/null; then
-        ts=$(tailscale ip -4 glass 2> /dev/null | head -n 1 || true)
-        if [ -n "$ts" ] && ping -c 1 -W 2 "$ts" > /dev/null 2>&1; then GLASS_IP=$ts; fi
-    fi
-    if [ -z "$GLASS_IP" ] && [ $usb = 0 ] && [ -s out/glass-mac ]; then
-        mac=$(head -n 1 out/glass-mac)
-        net=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | cut -d. -f1-3)
-        if [ -n "$net" ]; then
-            for i in $(seq 1 254); do ping -c 1 -W 1 "$net.$i" > /dev/null 2>&1 & done
-            wait
-            found=$(ip neigh show | awk -v m="$mac" 'tolower($0) ~ m && $1 ~ /^[0-9.]+$/ { print $1; exit }')
-            if [ -n "$found" ]; then
-                GLASS_IP=$found
-                echo "$found" > out/glass-ip
+    # Else the Glass by its MAC in the neighbour table after one round of
+    # pings over this desktop's subnet (about a second, 254 pings), at most
+    # once a minute (the supervisors ask every few seconds while the Glass
+    # is away): its new DHCP address, remembered.
+    if [ -z "$GLASS_IP" ] && [ -n "$gmac" ]; then
+        stamp=out/.glass-sweep
+        if [ -z "$(find "$stamp" -newermt '-60 seconds' 2> /dev/null)" ]; then
+            touch "$stamp"
+            net=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | cut -d. -f1-3)
+            if [ -n "$net" ]; then
+                for i in $(seq 1 254); do ping -c 1 -W 1 "$net.$i" > /dev/null 2>&1 & done
+                wait
+                found=$(ip neigh show | awk -v m="$gmac" 'tolower($0) ~ m && $1 ~ /^[0-9.]+$/ && !/FAILED|INCOMPLETE/ { print $1; exit }')
+                if [ -n "$found" ]; then
+                    GLASS_IP=$found
+                    echo "$found" > out/glass-ip
+                fi
             fi
         fi
+    fi
+    # Else the USB link if it is there; else the Glass on the tailnet
+    # (tailscaled on the Glass, named "glass"; the phone's hotspot, anywhere
+    # else), the desktop's tailscale giving the address, no DNS needed.
+    [ -z "$GLASS_IP" ] && ping -c 1 -W 1 172.16.42.1 > /dev/null 2>&1 && GLASS_IP=172.16.42.1
+    if [ -z "$GLASS_IP" ] && command -v tailscale > /dev/null; then
+        ts=$(tailscale ip -4 glass 2> /dev/null | head -n 1 || true)
+        if [ -n "$ts" ] && ping -c 1 -W 2 "$ts" > /dev/null 2>&1; then GLASS_IP=$ts; fi
     fi
     [ -n "$GLASS_IP" ] || GLASS_IP=172.16.42.1
 fi
@@ -717,20 +728,12 @@ case "$verb" in
 
     local-camera)
         # The camera on the Glass's own screen, nothing over the network:
-        # glass-camera -y (NV12 from the Ducati) into glass-fb -n (the video
-        # overlay), detached on the Glass. One process holds the camera, so
-        # the camera window here (glass-camera.service) is stopped first; `off`
-        # ends the view (the console shows again) and does not restart it.
+        # the display source camera-local (glass-localcam on the Glass:
+        # glass-camera -y into glass-fb -n, restarted when it ends, back at
+        # boot); `off` is the console.
         case "${1:-on}" in
-            on)
-                systemctl --user stop glass-camera.service 2> /dev/null || true
-                ssh_glass 'pkill -x glass-camera; pkill -x glass-fb; sleep 1; setsid sh -c "exec /usr/local/bin/glass-camera -y -w 640 -h 360 -r 15 2> /run/glass/local-camera.log | /usr/local/bin/glass-fb -n -r 15 2>> /run/glass/local-camera.log" < /dev/null > /dev/null 2>&1 &'
-                say "the camera on the Glass's screen (log /run/glass/local-camera.log there); glass local-camera off to end it"
-                ;;
-            off)
-                ssh_glass 'pkill -x glass-camera; pkill -x glass-fb; true'
-                say "the camera view on the Glass ended (the camera window here: systemctl --user start glass-camera)"
-                ;;
+            on) exec "$top/scripts/glass" display camera-local ;;
+            off) exec "$top/scripts/glass" display console ;;
             *) die "glass local-camera [on|off]" ;;
         esac
         ;;
@@ -840,6 +843,11 @@ case "$verb" in
         fi
         quiet='for p in $(pidof glass-camera); do tr "\0" " " < /proc/$p/cmdline | grep -q " -y" && kill $p; done; p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi; true'
         systemctl --user is-active --quiet glass-camera.service || quiet="pkill -x glass-camera; $quiet"
+        # The choice kept on the Glass too (/etc/glass/display-source), first,
+        # so the local camera's supervisor (glass-localcam) does not start its
+        # view again, and so the Glass puts camera-local or off back at boot
+        # without this desktop.
+        quiet="mkdir -p /etc/glass; echo $want > /etc/glass/display-source; /usr/sbin/glass-localcam stop 2> /dev/null; $quiet"
         unblank='echo 0 > /sys/class/graphics/fb0/blank'
         mkdir -p "$top/out"
         echo "$want" > "$srcf"
@@ -851,8 +859,8 @@ case "$verb" in
                 ;;
             camera-local)
                 systemctl --user disable --now glass-viewd.service glass-camera.service 2>&1 | grep -v "^Removed" >&2 || true
-                ssh_glass "pkill -x glass-camera; $quiet; sleep 1; $unblank; setsid sh -c 'exec /usr/local/bin/glass-camera -y -w 640 -h 360 -r 15 2> /run/glass/local-camera.log | /usr/local/bin/glass-fb -n -r 15 2>> /run/glass/local-camera.log' < /dev/null > /dev/null 2>&1 &" < /dev/null ||
-                    die "the Glass did not take the change"
+                ssh_glass "pkill -x glass-camera; $quiet; sleep 1; $unblank; /usr/sbin/glass-localcam start" < /dev/null ||
+                    die "the Glass did not take the change (glass update installs glass-localcam)"
                 ;;
             console | off)
                 systemctl --user disable --now glass-viewd.service 2>&1 | grep -v "^Removed" >&2 || true
@@ -906,7 +914,7 @@ case "$verb" in
                     ;;
                 off)
                     systemctl --user stop glass-viewd.service glass-camera.service 2> /dev/null || true
-                    [ -n "$lit" ] && ssh_glass 'pkill -x glass-camera; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
+                    [ -n "$lit" ] && ssh_glass 'mkdir -p /etc/glass; echo off > /etc/glass/display-source; /usr/sbin/glass-localcam stop 2> /dev/null; pkill -x glass-camera; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
                     say "display off (glass display: $chosen comes back on the next two-finger tap)"
                     exit 0
                     ;;
