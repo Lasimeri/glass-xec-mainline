@@ -5,6 +5,8 @@
  *              twentieth of the pad
  *   swipe      one finger along the pad, at least a fifth of its length
  *              either way, down and up within SWIPE_MS
+ *   dtap       two taps, the second landing within DTAP_MS of the first
+ *              lifting (a single tap is said only once that time is up)
  *   tap2       two fingers down and up within TAP2_MS, neither moving more
  *              than a twentieth (Glass's own two-finger tap)
  *
@@ -45,6 +47,7 @@
 
 #define TAP_MS 300
 #define TAP2_MS 400   /* two fingers seldom land and lift at one instant */
+#define DTAP_MS 300   /* a double tap: the second lands within this of the first lifting */
 #define SWIPE_MS 1000
 #define IDS 10        /* DEFAULT_MAX_ABS_MT_TRACKING_ID in rmi_f11.c */
 #define PADS 4
@@ -62,6 +65,19 @@ struct pad {
 static struct pad pads[PADS];
 static int npads;
 static long last_scan;   /* ms, monotonic: devices looked for every 2 s */
+/* A tap waits DTAP_MS after its lift for a second one (a double tap); a
+ * touch begun within that time is waited for, and if it is a tap the two are
+ * one "dtap", else the first goes out as "tap" ahead of it. */
+static int tap_pending;
+static long tap_deadline;   /* ms, monotonic */
+
+static long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long) ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+static void say(const char *g) { printf("%s\n", g); fflush(stdout); }
+static void flush_tap(void) { if (tap_pending) { tap_pending = 0; say("tap"); } }
 
 /* Event time in ms; the field names of newer headers (input_event_sec). */
 static long ms(const struct input_event *e) { return (long) e->input_event_sec * 1000L + (long) e->input_event_usec / 1000; }
@@ -152,8 +168,16 @@ static void event(struct pad *p, const struct input_event *e) {
             else why = dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no gesture";
             /* A swipe carries its direction along the pad (+ or -): the desktop
              * maps one way to the next display source, the other to the last. */
-            if (g && !strcmp(g, "swipe")) { printf("swipe %c\n", dx >= 0 ? '+' : '-'); fflush(stdout); }
-            else if (g) { printf("%s\n", g); fflush(stdout); }
+            if (g && !strcmp(g, "tap")) {
+                if (tap_pending) { tap_pending = 0; g = "dtap"; say(g); }
+                else { tap_pending = 1; tap_deadline = now_ms() + DTAP_MS; }
+            } else if (g && !strcmp(g, "swipe")) {
+                flush_tap();
+                printf("swipe %c\n", dx >= 0 ? '+' : '-'); fflush(stdout);
+            } else {
+                flush_tap();
+                if (g) say(g);
+            }
             fprintf(stderr, "glass-tap: touch on %s: %d finger(s), %ld ms, %d units of travel, %+d along: %s\n", p->path, p->maxf, dt,
                     p->travel, dx, g ? g : why);
             p->down = 0;
@@ -170,7 +194,9 @@ int main(int argc, char **argv) {
     for (;;) {
         struct pollfd pf[PADS];
         for (int i = 0; i < npads; i++) { pf[i].fd = pads[i].fd; pf[i].events = POLLIN; pf[i].revents = 0; }
-        int r = poll(pf, (nfds_t) npads, 2000);
+        int wait = 2000;
+        if (tap_pending) { long left = tap_deadline - now_ms(); wait = left < 0 ? 0 : (int) left; }
+        int r = poll(pf, (nfds_t) npads, wait);
         if (r < 0 && errno != EINTR) return 1;
         for (int i = 0; i < npads; i++) {
             if (!(pf[i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
@@ -186,9 +212,13 @@ int main(int argc, char **argv) {
                 i--;
             }
         }
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        long now = (long) ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+        long now = now_ms();
+        /* The double tap's time is up with no finger down: a single tap. */
+        if (tap_pending && now >= tap_deadline) {
+            int touching = 0;
+            for (int i = 0; i < npads; i++) touching |= pads[i].down;
+            if (!touching) flush_tap();
+        }
         if (!fixed && now - last_scan >= 2000) { scan(); last_scan = now; }
         if (!npads) { fprintf(stderr, "glass-tap: no touchpad left\n"); return 1; }
     }

@@ -743,13 +743,13 @@ case "$verb" in
         # through a virtual pad in the real pad's protocol, and the running
         # glass-tap (and so this desktop's glass-tap.sh) takes them as a
         # finger's; what it made of each touch is in the tap log.
-        [ $# -gt 0 ] || die "glass touch tap|tap2|swipe|hold ..."
+        [ $# -gt 0 ] || die "glass touch tap|dtap|tap2|swipe|hold ..."
         r=${XDG_RUNTIME_DIR:-/tmp}/glass-tap.log
         n=$(wc -l < "$r" 2> /dev/null || echo 0)
         ssh_glass "/usr/local/bin/glass-touch $*" < /dev/null || die "glass-touch did not run (glass update installs it)"
         sleep 1
         say "the tap log since:"
-        tail -n +$((n + 1)) "$r" 2> /dev/null | grep -E 'touch on|tap:|toggled|camera window' >&2 || say "nothing: no gesture reached glass-tap.sh"
+        tail -n +$((n + 1)) "$r" 2> /dev/null | grep -E 'touch on|tap:|double tap|toggled|camera window|display source' >&2 || say "nothing: no gesture reached glass-tap.sh"
         ;;
 
     display)

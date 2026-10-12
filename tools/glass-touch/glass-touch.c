@@ -9,9 +9,10 @@
  * SYN_REPORT; a lift is the fingers no longer listed, the last one's an
  * empty report. glass-tap reads devices of this name as it reads the pad.
  *
- *   glass-touch GESTURE...       tap | swipe | tap2 | hold, played in order
+ *   glass-touch GESTURE...       tap | dtap | swipe | tap2 | hold, played in order
  *
  *   tap     one finger, 96 ms, still            glass-tap: "tap"
+ *   dtap    two taps 150 ms apart               glass-tap: "dtap"
  *   tap2    two fingers, 120 ms, still          glass-tap: "tap2"
  *   swipe   one finger across 40% of the pad    glass-tap: "swipe"
  *   hold    one finger, 720 ms                  nothing (too long)
@@ -123,10 +124,10 @@ static void ranges(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "glass-touch GESTURE...   (tap, tap2, swipe, hold)\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "glass-touch GESTURE...   (tap, dtap, tap2, swipe, hold)\n"); return 2; }
     for (int i = 1; i < argc; i++)
-        if (strcmp(argv[i], "tap") && strcmp(argv[i], "tap2") && strcmp(argv[i], "swipe") && strcmp(argv[i], "hold")) {
-            fprintf(stderr, "glass-touch: no gesture \"%s\" (tap, tap2, swipe, hold)\n", argv[i]);
+        if (strcmp(argv[i], "tap") && strcmp(argv[i], "dtap") && strcmp(argv[i], "tap2") && strcmp(argv[i], "swipe") && strcmp(argv[i], "hold")) {
+            fprintf(stderr, "glass-touch: no gesture \"%s\" (tap, dtap, tap2, swipe, hold)\n", argv[i]);
             return 2;
         }
     ranges();
@@ -148,6 +149,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         fprintf(stderr, "glass-touch: %s\n", argv[i]);
         if (!strcmp(argv[i], "tap")) still(1, 8);
+        else if (!strcmp(argv[i], "dtap")) { still(1, 8); sleep_ms(150); still(1, 8); }
         else if (!strcmp(argv[i], "tap2")) still(2, 10);
         else if (!strcmp(argv[i], "swipe")) swipe();
         else still(1, 60);

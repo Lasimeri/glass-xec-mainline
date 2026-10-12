@@ -4,7 +4,10 @@
 #   a tap     mutes or unmutes the voice input (the microphone), the same
 #             toggle as the number pad's period (ptt079 --toggle in ~/tts079:
 #             $XDG_RUNTIME_DIR/speak-079/muted, the status line, and
-#             "Muted." / "Listening." in 079's voice)
+#             "Muted." / "Listening." in 079's voice); it waits 300 ms
+#             for a second tap
+#   a double tap  mutes or unmutes the Glass's sound (the "Google Glass"
+#             output's mute, carried to the Glass by glass-audio.sh)
 #   a two-finger tap  the stream on or off: the chosen display source and
 #             the display together (glass camera-display toggle: off while
 #             it charges); the display going dark or lit is the answer
@@ -62,6 +65,15 @@ while :; do
                     echo "glass-tap: $(date +%T) $g: $dir display source" >> "$log"
                     GLASS_IP=$addr setsid flock -n "$run/glass-display.lock" \
                         "$top/scripts/glass" display "$dir" < /dev/null >> "$log" 2>&1 9>&- &
+                    ;;
+                dtap)
+                    # The Glass's sound muted or back: the "Google Glass"
+                    # output's mute here, which glass-audio.sh carries to the
+                    # Glass's own level.
+                    pactl set-sink-mute glass toggle 2>> "$log"
+                    m=$(pactl get-sink-mute glass 2> /dev/null | awk '{ print ($2 == "yes") ? "muted" : "on" }')
+                    echo "glass-tap: $(date +%T) double tap: Glass sound ${m:-unknown (no Google Glass output)}" >> "$log"
+                    command -v notify-send > /dev/null && notify-send -a Glass -i audio-volume-muted "Glass sound" "${m:-no Google Glass output}" 2> /dev/null
                     ;;
                 tap)
                     "$toggle" --toggle
