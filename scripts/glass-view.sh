@@ -78,7 +78,7 @@ if [ -z "$out" ]; then
     [ -n "$out" ] || out=DP-1
 fi
 case "$out" in
-    window | follow) ;;
+    window | follow | tracker) ;;
     *)
         # Only a real monitor's name is taken (and remembered): a stray word,
         # such as a frame rate given as the first argument, is refused.
@@ -92,8 +92,13 @@ esac
 # which; the Glass screen of glass-screen.sh is the one meant), captured at
 # the window's own size, so a 1280x720 window reaches the Glass at an exact
 # 2:1 and its text at the size the nested session draws it.
+# OUTPUT "tracker": Intel-Phi-VisionTrack's live window (vt_view), one window of
+# KWin's through the same portal: the dialog asks which, the first time and
+# again whenever that window has been replaced. Fitted whole into the display,
+# with bars, by TRACKER_SIZE below.
 castopt=()
 [ "$out" = window ] && castopt=(--window)
+[ "$out" = tracker ] && castopt=(--window)
 # ASK=1: ask again in the dialog (another window or monitor than last time).
 [ "${ASK:-0}" = 1 ] && castopt+=(--forget)
 # The Glass side: its ffmpeg, on the rootfs (/usr/local/bin, built in), or
@@ -214,8 +219,20 @@ fi
 # 24 under-delivers (22.4/s, repeats). Default: 9/8 of the stream rate.
 src_fps=${SRC_FPS:-$(( fps * 9 / 8 ))}
 steps=()
+fit=()
 if [ "$out" != window ]; then
-    sg=$("$desk" outputs 2>/dev/null | awk -v o="$out:" '$1 == o { print $2 }')
+    if [ "$out" = tracker ]; then
+        # The stream's size, for the halving steps: the window's 3840x1800
+        # (layout() in vt_view.c) with KWin's frame and title bar, 3848x1832
+        # (pw-cli enum-params NODE Format). It goes into 16:9 whole, with bars.
+        # pixel-aspect-ratio=1/1 is what makes the bars: without it the scaler
+        # keeps the shape by changing the pixels' shape, and the picture comes
+        # out stretched to fill (seen on the Glass, 2026-11-03).
+        sg=${TRACKER_SIZE:-3848x1832}
+        fit=(! cudaconvertscale add-borders=true ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,pixel-aspect-ratio=1/1")
+    else
+        sg=$("$desk" outputs 2>/dev/null | awk -v o="$out:" '$1 == o { print $2 }')
+    fi
     sw=${sg%x*}; sh=${sg#*x}
     if [ -n "$sw" ] && [ -n "$sh" ]; then
         while [ $((sw / 2)) -ge "$W" ] && [ $((sh / 2)) -ge "$H" ]; do
@@ -228,7 +245,19 @@ for e in cudacompositor cudascale; do
     gst-inspect-1.0 "$e" > /dev/null 2>&1 || { echo "glass-view: GStreamer element $e is missing" >&2; exit 1; }
 done
 echo "glass-view: $out -> portal screencast (at most $src_fps/s), GPU downscale in $((${#steps[@]} / 4)) halving step(s) then to ${W}x${H}, $fps frames/s from the compositor, NVENC H.264 ${bitrate} kbit/s -> Glass over ssh; Ctrl-C stops" >&2
-if [ "$out" = window ]; then
+if [ "$out" = tracker ]; then
+    # No window, no cast and no dialog: wait for it. A cast of a window that has
+    # gone must not leave its last picture on the Glass looking live, so the
+    # stream ends with that window (the process group: glass-viewd starts each
+    # stream as its own), and glass-viewd starts it again on the next one.
+    until tracker_pid=$(pgrep -x vt_view); do sleep 2; done
+    if [ "$(ps -o pgid= -p $$ | tr -d ' ')" = "$$" ]; then
+        ( while kill -0 "$tracker_pid" 2> /dev/null; do sleep 2; done
+          echo "glass-view: the tracking window ended ($(date +%T)), stream ended" >&2
+          kill -TERM 0 ) &
+    fi
+    echo "glass-view: the portal's dialog asks which window to share unless it remembers this one: pick VisionTrack" >&2
+elif [ "$out" = window ]; then
     echo "glass-view: the first run asks in the portal's dialog which window to share: pick the Glass screen (KDE Wayland Compositor)" >&2
 else
     echo "glass-view: the first run asks in the portal's dialog which monitor to share: pick $out" >&2
@@ -236,7 +265,7 @@ fi
 "$desk" cast "${castopt[@]}" -- gst-launch-1.0 -q \
     pipewiresrc fd=@FD@ path=@NODE@ do-timestamp=true keepalive-time=$((1000 / fps)) ! "video/x-raw,max-framerate=$src_fps/1" \
     ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream \
-    ! cudaupload "${steps[@]}" \
+    ! cudaupload "${steps[@]}" "${fit[@]}" \
     ! cudacompositor latency=0 sink_0::xpos=0 sink_0::ypos=0 sink_0::width="$W" sink_0::height="$H" \
     ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,framerate=$fps/1" \
     ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \

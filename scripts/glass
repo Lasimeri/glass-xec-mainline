@@ -763,6 +763,7 @@ case "$verb" in
         #   MONITOR       a desktop monitor (glass-viewd.service, glass-view.sh)
         #   follow        the primary monitor 1:1 around the pointer
         #   window        the Glass screen, a nested desktop (glass-screen.sh)
+        #   tracker       Intel-Phi-VisionTrack's live window (vt_view), whole
         #   console       the Glass's own console
         #   off           the display dark, every stream to it stopped
         # Alone: a menu (fzf in a terminal; kdialog from the launcher entry that
@@ -774,7 +775,7 @@ case "$verb" in
         srcf=$top/out/glass-source
         desk=${DESK:-$HOME/deskpilot/target/release/desk}
         monitors=$("$desk" outputs 2> /dev/null | awk -F: '/^[A-Z]/ && !/workspace/ {print $1}' || true)
-        sources="camera camera-local $(echo $monitors) follow window console off"
+        sources="camera camera-local tracker $(echo $monitors) follow window console off"
         current=$(head -n 1 "$srcf" 2> /dev/null || true)
         label() {
             case "$1" in
@@ -782,6 +783,7 @@ case "$verb" in
                 camera-local) echo "camera on the Glass alone (camera window here off)" ;;
                 follow) echo "the primary monitor 1:1 around the pointer" ;;
                 window) echo "the Glass screen (a nested desktop window)" ;;
+                tracker) echo "the live tracking window (VisionTrack)" ;;
                 console) echo "the Glass's own console" ;;
                 off) echo "display off" ;;
                 *) echo "monitor $1" ;;
