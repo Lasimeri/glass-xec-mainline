@@ -11,9 +11,9 @@
 #   a two-finger tap  the stream on or off: the chosen display source and
 #             the display together (glass camera-display toggle: off while
 #             it charges); the display going dark or lit is the answer
-#   a swipe   forward: the next display source; back: the one before
-#             (glass display next|prev: camera, the camera alone, each
-#             monitor, follow, console); a desktop notification names it;
+#   a swipe   forward: the next monitor; back: the one before
+#             (glass display next|prev, the monitors only, left to right);
+#             a desktop notification names it;
 #             which way is forward: glass swipe-forward + or -
 #
 # The desktop holds an ssh session to the Glass and reads glass-tap's lines
@@ -47,6 +47,11 @@ while :; do
         while read -r g; do
             case "$g" in
                 tap2)
+                    # Real two-finger taps reach here twice within a second (this log,
+                    # 2026-11-04, at every one): the second must not undo the first.
+                    t2=$(date +%s%3N)
+                    [ $((t2 - ${last_tap2:-0})) -lt 1500 ] && continue
+                    last_tap2=$t2
                     # Two fingers: the stream (the chosen source) on or off,
                     # the display with it (glass camera-display toggle).
                     echo "glass-tap: $(date +%T) two-finger tap: stream and display toggled" >> "$log"
@@ -54,8 +59,8 @@ while :; do
                         "$top/scripts/glass" camera-display toggle < /dev/null >> "$log" 2>&1 9>&- &
                     ;;
                 "swipe +" | "swipe -" | swipe)
-                    # One finger along the pad: forward is the next display
-                    # source, back the one before (glass display next|prev).
+                    # Along the pad, one or two fingers: forward is the next monitor,
+                    # back the one before (glass display next|prev).
                     # Which sign is forward: out/glass-swipe-forward (+ by
                     # default; glass swipe-forward - flips it). A Glass whose
                     # glass-tap is older says only "swipe": next.
@@ -84,7 +89,7 @@ while :; do
     session=$!
     set +m
     group=$(ps -o pgid= -p "$session" 2> /dev/null | tr -d ' ')
-    "$top/scripts/glass-pathguard.sh" "$addr" "-${group:-$session}" >> "$log" 2>&1 9>&- &
+    GLASS_GUARD_MISSES=5 "$top/scripts/glass-pathguard.sh" "$addr" "-${group:-$session}" >> "$log" 2>&1 9>&- &
     guard=$!
     wait $session
     kill $guard 2> /dev/null

@@ -3,8 +3,9 @@
  *
  *   tap        one finger down and up within TAP_MS, moving less than a
  *              twentieth of the pad
- *   swipe      one finger along the pad, at least a fifth of its length
- *              either way, down and up within SWIPE_MS
+ *   swipe      one or two fingers along the pad, at least a twelfth of its
+ *              length either way, down and up within SWIPE_MS (the real finger
+ *              on this pad: 196 units of 1365, 236 ms; a fifth refused it)
  *   dtap       two taps, the second landing within DTAP_MS of the first
  *              lifting (a single tap is said only once that time is up)
  *   tap2       two fingers down and up within TAP2_MS, neither moving more
@@ -15,8 +16,8 @@
  *
  * Built on the Glass (gcc from Alpine), installed as /usr/local/bin/glass-tap.
  * The desktop reads it over ssh (scripts/glass-tap.sh): a tap toggles the
- * voice mute (the microphone), a swipe turns the camera stream and the
- * Glass's display on or off together (glass camera-display toggle).
+ * voice mute (the microphone), a swipe changes the monitor shown, a two-finger tap
+ * turns the stream and the display on or off together (glass camera-display toggle).
  *
  * The pad speaks multi-touch protocol A (board-notle.c sets type_a = 1 for
  * rmi_f11; the device has no ABS_MT_SLOT): every report lists the fingers
@@ -48,7 +49,8 @@
 #define TAP_MS 300
 #define TAP2_MS 400   /* two fingers seldom land and lift at one instant */
 #define DTAP_MS 300   /* a double tap: the second lands within this of the first lifting */
-#define SWIPE_MS 1000
+#define SWIPE_MS 1500
+#define SWIPE_DIV 12  /* of the pad's length; a tap's slop is a twentieth */
 #define IDS 10        /* DEFAULT_MAX_ABS_MT_TRACKING_ID in rmi_f11.c */
 #define PADS 4
 
@@ -138,11 +140,16 @@ static void contact_end(struct pad *p, long t) {
     p->has = 0; p->id = -1; p->hx = p->hy = 0;
 }
 
-/* How far the finger ended along the pad from where it landed (x, signed);
- * one finger's touch, so the one finger seen. */
+/* How far along the pad the touch went (x, signed): the finger that went
+ * furthest, for two fingers as for one. */
 static int along(const struct pad *p) {
-    for (int i = 0; i < IDS; i++) if (p->seen[i]) return p->lx[i] - p->x0[i];
-    return 0;
+    int best = 0;
+    for (int i = 0; i < IDS; i++) {
+        if (!p->seen[i]) continue;
+        int d = p->lx[i] - p->x0[i];
+        if (abs(d) > abs(best)) best = d;
+    }
+    return best;
 }
 
 static void event(struct pad *p, const struct input_event *e) {
@@ -159,12 +166,12 @@ static void event(struct pad *p, const struct input_event *e) {
             if (p->frame > p->maxf) p->maxf = p->frame;
         } else if (p->down) {
             long dt = ms(e) - p->t0;
-            int dx = p->maxf == 1 ? along(p) : 0;
+            int dx = along(p);
             const char *g = NULL, *why = "no gesture";
             if (!p->moved && p->maxf == 1 && dt < TAP_MS) g = "tap";
             else if (!p->moved && p->maxf == 2 && dt < TAP2_MS) g = "tap2";
-            else if (p->moved && p->maxf == 1 && dt < SWIPE_MS && abs(dx) >= p->span / 5) g = "swipe";
-            else if (p->moved) why = p->maxf == 1 && dt < SWIPE_MS ? "moved, too short for a swipe" : "moved, no gesture";
+            else if (p->moved && p->maxf <= 2 && dt < SWIPE_MS && abs(dx) >= p->span / SWIPE_DIV) g = "swipe";
+            else if (p->moved) why = p->maxf <= 2 && dt < SWIPE_MS ? "moved, too short for a swipe" : "moved, no gesture";
             else why = dt >= (p->maxf == 2 ? TAP2_MS : TAP_MS) ? "too long, no tap" : "no gesture";
             /* A swipe carries its direction along the pad (+ or -): the desktop
              * maps one way to the next display source, the other to the last. */

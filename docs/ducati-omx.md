@@ -57,10 +57,10 @@ size_t stride; size_t offset; u32 out_align; u32 token}` (36 bytes); fmt 0 8-bit
 From the firmware's resource table (`.resource_table`, file offset 0x1000):
 devmem entries map TILER identically, da = pa: 0x60000000 (256 MB, modes 0
 and 1: 8 and 16-bit 2D), 0x70000000 (mode 2), 0x78000000 (mode 3, 1D pages).
-IOBUFS maps da 0x88000000 to pa 0xfc000000 (60 MB), near but not exactly
-the secure_input heap (0xfc100000 by the board file's arithmetic). So every
-buffer handed to the Ducati is a TILER buffer: 2D for pictures, 1D (page
-format) for the rest. The kernel translates a registered handle to the
+IOBUFS maps da 0x88000000 to pa 0xfc000000 (60 MB), around
+the secure_input heap (0xfc100000 by the board file's arithmetic): that is how the
+Ducati sees carveout buffers, which TI's proxy gives every non-2D port on ION
+builds. Pictures are TILER 2D. The kernel translates a registered handle to the
 Ducati's address in `write()` (ion_phys, then rproc_pa_to_da).
 
 ## Packets
@@ -168,7 +168,17 @@ carries SPS and PPS (flag CODECCONFIG), then an IDR. Measured 2026-10-07 at
 960x540, 15/s, 768 kbit/s: 15.0 frames/s, 762 to 779 kbit/s, the A9 copying
 only the bitstream.
 
-## The decoder (not working yet)
+## The decoder
+
+**Works since 2026-11-04, bit-exact.** `tools/glass-decode`: 68 frames of `cam.flv` (this Ducati's own encoder output) compared against ffmpeg's decode, 0 differ, MD5 equal; 71 frames in about 1.1 s including setup. It is the monitor stream's decoder (`glass-decode | glass-fb -n`, `scripts/glass-view.sh`, `HW=0` for ffmpeg on the A9); the camera's heads-up display still decodes in software (concurrent encode and decode on the Ducati is untested).
+
+**The fix: `bUsePortReconfigForPadding` is required, and its index is the firmware's own, `0x7F00007D`.** KitKat's header gives `OMX_TI_IndexParamUseEnhancedPortReconfig` as `0x7F000072`, which this firmware answers with 0x8000101a (unsupported). The real number is the sum of the subtraction chain in its SetParameter (0x1770fc to 0x177136), the same chain that reproduces PortDefinition 0x02000001, VideoPortFormat 0x06000001 and 2DBufferAllocDimension 0x7F000057. Without the flag the firmware takes a broken path in its output setup: at 0x14093c it writes the chroma's size over descs[0], not descs[1], so the codec is handed Y 768x240 and a nonsense UV, and refuses every frame with extended error 0x4000, `XDM_UNSUPPORTEDPARAM`, 0 bytes consumed. Other TI indices may be off the same way: this firmware's enum is not KitKat's. With the flag the port's frame size becomes the padded 768x480, the picture arrives as a crop change (640x360 at 32,24), and no second reconfiguration crashes anything.
+
+**How to see inside:** the trace level is the word at Ducati 0x803B98B4, PA 0xF5FB98B4 (no symbols; 721 real checks read it, thresholds 0, 2, 3, 4, 5; default 2; 4 prints `[TRC]`). Write it with the Ducati suspended; a crash reloads the firmware and it returns to 2. Text PA = DA + 0xF5600000, data PA = DA - 0x80000000 + 0xF5C00000. The codec's live parameters can be read from memory while it sleeps. Never read `/sys/kernel/debug/ion/<pid>`: it oopses (`ion_debug_client_show`, strnlen) and leaves that client's lock held; reboot after it.
+
+The bitstream buffers come from the ION carveout (heap mask 1 << 2), as TI's proxy does on ION builds, seen by the Ducati through IOBUFS at 0x88000000. Whether TILER 1D decodes with the fix is untested (`GLASS_DECODE_INPUT=tiler`). Before the fix both failed alike, so the carveout was not the cause.
+
+What was seen before the fix, kept for the record:
 
 `tools/glass-decode` (2026-10-07), kept for the next attempt; not built or
 used by anything (the heads-up display decodes in software).
@@ -201,6 +211,39 @@ used by anything (the heads-up display decodes in software).
   in the `OMX_Video_Decoder` task. remoteproc recovers it in about 2 s and
   glass-camera reconnects by itself; ten crashes on 2026-10-07, every one
   recovered.
-- Not tried yet: the trace at info level (`traceLevel` at PA 0xf5fb98b4 is
-  0x2), output frame dimensions with the codec's padding as TI's proxy
-  derives them, Android's single gralloc NV12 buffer layout.
+
+Read 2026-11-04, nothing run:
+
+- **Extended error 0x4000 is bit 14, `XDM_UNSUPPORTEDPARAM`**, "unsupported input parameter or configuration" (TI's `xdm.h`), without bit 15, `XDM_FATALERROR`. So the decoder refused its configuration, not the stream: which is why NVENC's and this Ducati's own bitstreams failed alike.
+- The stride is not obviously it: TI's proxy (`omx_proxy_videodec.c`, `RPC_UTIL_SetStrideAndPadding`) sets `nStride` 4096 for 2D before Loaded to Idle and before PortEnable, as `glass-decode` does, and 4096 passes the firmware's own checks (`nStride & 0x7F == 0`, `nStride >= nFrameWidth`). TI's xdm.h names `displayWidth` as its example of this error; whether the firmware passes the stride on as one is unread.
+- The firmware prints the answer at trace level: `[TRC] Stride value set on o/p port is %d`, `[TRC] Buffer provided to Codec with Padded Width = %d, Padded Height = %d`, `[TRC] Update the Output buffer details before the Codec Process call`. So the next attempt starts with the raised `traceLevel` above, not with another guess.
+- `OMX_TI_IndexParamUseEnhancedPortReconfig` answering 0x8000101a is, by TI's forum, most often an index mismatch between DOMX and the firmware, and this firmware already differs from KitKat's headers. Other `OMX_TI_*` numbers may be off too.
+- To separate the codec from the OMX layer: the same run with role `video_decoder.mpeg4`. 0x4000 there too means the fault is in the common output setup, not in H264D.
+- Roles in this firmware: avc, h263, mpeg2, mpeg4, rv, sorspk, svc, vp6, vp7, wmv. Encoders: H264E, H264SVCE, MPEG4E. No JPEG or MJPEG component: VLCDJ is reached only inside the camera. No DCE: 0 strings in the firmware, 0 files in this kernel. Channels the firmware announces, live on the Glass: `rpmsg-omx0`, `rpmsg-omx1`, `omaprpc` (and two `rpmsg-client-sample`). `omaprpc` is a generic remote-call service: its driver is in the tree (`drivers/rpmsg/omaprpc`) but not in `notle_defconfig`, there is no `/dev` node, and what functions the firmware registers on it is unread. At idle `ivahd_pwrdm`, `cam_pwrdm`, `tesla_pwrdm` are OFF and `ipu_c0` is suspended; the only remoteproc is the Ducati, so the Tesla DSP has no way in on this kernel.
+
+Power, 2026-11-04, `cam.flv` looped in real time from the desktop over ssh at 532 kbit/s, 12/s, on battery, panel dark, `power_save` off, two interleaved passes of 45 s at 1 Hz: idle 292.1 and 296.6 mW; delivered and discarded 529.4 and 526.1; ffmpeg software decode to null 706.0 and 705.2; hardware decode 658.6 and 650.3, copying every picture out to stdout. So the radio and ssh cost +233.3 mW, software decode +177.9, hardware decode +126.8: hardware saves 51.1 mW here. CPU0 spent 0.0 s of 45 in C4 during hardware decode against about 31 s in software decode; the firmware's trace shows `[IVAHD]: Requesting latency constraints 400`, and C3 and C4 have exit latencies of 768 and 978 us, which is the likely reason (inferred, the constraint was not read from the kernel). Not measured: a zero-copy path into a DSS overlay, a real display pipeline, latency, frame timing.
+
+### The hold
+
+The decoder keeps `num_ref_frames` pictures before it lets one out. On a live 12/s feed: 262 ms from frame in to picture out with NVENC's 3 references, 113 ms with 1 (`glass-decode`'s five-second lines). The picture leaves when the reference window pushes it out: in the trace `OutputId` equals `FreeBuffID` every cycle, rotating through refs + 1 buffers.
+
+In the firmware that is `displayDelay` (static parameters +0x20, read live at Ducati 0x85C2A758 with `/dev/mem`, read only), written in two places: at 0x2C59BE, where a stream with more references than the port assumed sets it to `spsMaxRefFrames`, or to 0 (decode order) for `eProfile` Baseline at 0x2C59D2; and at 0x3218B6, in the function that computes buffer sizes, which always sets it to `spsMaxRefFrames` when that is known or `bUsePortReconfigForPadding` is on. The second runs after the first, so the 0 does not survive to the codec's re-creation.
+
+Tried, without effect on the hold:
+- `bitstream_restriction` with `max_num_reorder_frames` 0 in the SPS, in-band copies removed: 275 ms.
+- `eProfile` Baseline and `nRefFrames` 1 in `OMX_IndexParamVideoAvc`: buffers 7 to 4 at 3 references, 3 to 2 at 1, hold the same.
+- Output port at the padded 768x480 before starting: refused, 0x80001019.
+- Input port at 768x480, to make the first output right: buffers become 896x576 and the reconfiguration still comes.
+- A client-set `nBufferCountMin`: ignored.
+- Bitstream buffers: 2 and 4 hold the same. One wedges: it is not returned, so keep at least 2.
+
+So the sender uses one reference. `nvh264enc` has no property for it (ten preset and tune combinations: 3 every time); `h264_nvenc -dpb_size 1` gives `max_num_ref_frames` 1 with one active (`-refs 1` alone gives 2). Rewriting the SPS of a 3-reference stream would be wrong: its PPS defaults to 3 active references.
+
+`h264_nvenc -rc cbr` fills to its target (3000 kbit/s on a picture `nvh264enc` CBR sends at 90, also with `-cbr_padding 0`), all of it radio. `-rc vbr -maxrate` behaves like `nvh264enc`:
+
+| 120 frames, same source | smpte scroll, kbit/s, PSNR dB | ball, kbit/s, PSNR dB |
+|---|---|---|
+| `nvh264enc` CBR 3000 | 2229, 71.06 | 90, 85.84 |
+| `h264_nvenc -rc cbr` | 3000, 71.02 | 3000, 85.82 |
+| `-rc vbr -maxrate 3000k` | 2096, 68.65 | 91, 83.38 |
+| `-rc vbr -cq 26 -maxrate 3000k` | 791, 41.25 | 18, 66.64 |

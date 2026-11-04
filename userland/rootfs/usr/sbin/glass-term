@@ -2,7 +2,7 @@
 # glass-term: the desktop's Claude Code session from the Glass, through SSH
 # into a shared tmux session (Claude Code has to run inside it on the
 # desktop: tmux new -A -s claude).
-#   glass-term [USER@HOST] [SESSION]    default lasimeri@172.16.42.2 claude
+#   glass-term [USER@HOST] [SESSION]    default the desktop's user (/etc/glass/desktop-user) @172.16.42.2, claude
 # The Glass's own key (made on first use, /root/.ssh/id_dropbear) has to be
 # in the desktop's ~/.ssh/authorized_keys: glass-term key prints it.
 k=/root/.ssh/id_dropbear
@@ -11,4 +11,5 @@ if [ "${1:-}" = key ]; then
     dropbearkey -y -f "$k" | grep '^ssh-'
     exit 0
 fi
-exec dbclient -i "$k" -t "${1:-lasimeri@172.16.42.2}" tmux new -A -s "${2:-claude}"
+u=$(cat /etc/glass/desktop-user 2> /dev/null || echo user)
+exec dbclient -i "$k" -t "${1:-$u@172.16.42.2}" tmux new -A -s "${2:-claude}"

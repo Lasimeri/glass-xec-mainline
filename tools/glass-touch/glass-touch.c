@@ -86,6 +86,21 @@ static void still(int fingers, int reports) {
     report(0, NULL, NULL);
 }
 
+/* Along the pad with FINGERS fingers, over PERMIL thousandths of its length,
+ * forward or (negative) back, in `reports` reports: shapes taken from what real
+ * fingers left in the tap log (196 of 1365 units in 236 ms; two fingers 650). */
+static void slide(int fingers, int permil, int reports) {
+    int x0 = info[ABS_MT_POSITION_X].minimum, span = info[ABS_MT_POSITION_X].maximum - x0;
+    int cy = (info[ABS_MT_POSITION_Y].minimum + info[ABS_MT_POSITION_Y].maximum) / 2;
+    int start = x0 + span / 2 - span * permil / 2000;
+    for (int r = 0; r < reports; r++) {
+        int xr = start + span * permil / 1000 * r / (reports - 1);
+        int x[2] = { xr, xr + span / 8 }, y[2] = { cy, cy };
+        report(fingers, x, y);
+    }
+    report(0, NULL, NULL);
+}
+
 static void swipe(void) {
     int x0 = info[ABS_MT_POSITION_X].minimum, span = info[ABS_MT_POSITION_X].maximum - x0;
     int cy = (info[ABS_MT_POSITION_Y].minimum + info[ABS_MT_POSITION_Y].maximum) / 2;
@@ -124,10 +139,10 @@ static void ranges(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "glass-touch GESTURE...   (tap, dtap, tap2, swipe, hold)\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "glass-touch GESTURE...   (tap, dtap, tap2, swipe, short, back, swipe2, back2, hold)\n"); return 2; }
     for (int i = 1; i < argc; i++)
-        if (strcmp(argv[i], "tap") && strcmp(argv[i], "dtap") && strcmp(argv[i], "tap2") && strcmp(argv[i], "swipe") && strcmp(argv[i], "hold")) {
-            fprintf(stderr, "glass-touch: no gesture \"%s\" (tap, dtap, tap2, swipe, hold)\n", argv[i]);
+        if (strcmp(argv[i], "tap") && strcmp(argv[i], "dtap") && strcmp(argv[i], "tap2") && strcmp(argv[i], "swipe") && strcmp(argv[i], "short") && strcmp(argv[i], "back") && strcmp(argv[i], "swipe2") && strcmp(argv[i], "back2") && strcmp(argv[i], "hold")) {
+            fprintf(stderr, "glass-touch: no gesture \"%s\" (tap, dtap, tap2, swipe, short, back, swipe2, back2, hold)\n", argv[i]);
             return 2;
         }
     ranges();
@@ -152,6 +167,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "dtap")) { still(1, 8); sleep_ms(150); still(1, 8); }
         else if (!strcmp(argv[i], "tap2")) still(2, 10);
         else if (!strcmp(argv[i], "swipe")) swipe();
+        else if (!strcmp(argv[i], "short")) slide(1, 144, 12);     /* one finger, 196 units forward */
+        else if (!strcmp(argv[i], "back")) slide(1, -144, 12);     /* the same back */
+        else if (!strcmp(argv[i], "swipe2")) slide(2, 480, 12);    /* two fingers, 650 units forward */
+        else if (!strcmp(argv[i], "back2")) slide(2, -480, 12);    /* the same back */
         else still(1, 60);
         sleep_ms(700);
     }

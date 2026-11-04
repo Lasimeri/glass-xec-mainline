@@ -78,7 +78,7 @@ if [ "${GLASS_CAMERA_TRACK:-1}" != 0 ] && [ -x "$ft" ] && command -v mpv > /dev/
     fi
     hkb=${HUD_KBPS:-500}
     hfps=${HUD_FPS:-12}   # the display's rate (the user: the display at 12 frames/s)
-    takeover='p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi;'
+    takeover='p=$(pidof glass-decode ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; i=0; while [ $i -lt 20 ]; do sleep 0.25; p=$(pidof glass-decode ffmpeg glass-fb); [ -z "$p" ] && break; i=$((i+1)); done; [ -z "$p" ] || kill -9 $p; fi;'
     hudcmd="$takeover /usr/local/bin/ffmpeg -hide_banner -loglevel warning -probesize 32 -analyzeduration 0 -max_delay 0 -flags low_delay -flags2 +fast -skip_loop_filter ${HUD_SKIP_LOOP:-all} -threads 2 -thread_type slice -f mpegts -i pipe:0 -fps_mode passthrough -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $hfps -b 1"
     hud() {   # stdin: frames from glass-tee's fd 3
         exec 6< <(exec ffmpeg -hide_banner -loglevel error -f yuv4mpegpipe -r "$fps" -i pipe:0 \

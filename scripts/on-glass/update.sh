@@ -57,7 +57,7 @@ done
 # 4. Tools: built from the staged source when it differs from the one the
 # binary was built from (kept in /usr/local/src after a good build only).
 built=""
-for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-decode glass-fbgrab; do
+for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-decode glass-fbgrab glass-wl; do
     src=./usr/local/src/$t.c
     [ -f "$src" ] || continue
     # The DOMX programs also follow the wire they share (omx/domx.h).
@@ -91,7 +91,7 @@ if has "$built" glass-console || has "$changed" /etc/glass/console; then
     restarted="$restarted display-shell"
 fi
 if has "$built" glass-fb; then
-    for p in $(pidof ffmpeg); do kill "$p"; done; sleep 1
+    for p in $(pidof glass-decode ffmpeg); do kill "$p"; done; sleep 1
     for p in $(pidof glass-fb); do kill "$p"; done 2> /dev/null
     restarted="$restarted stream"
 fi

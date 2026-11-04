@@ -28,7 +28,7 @@ usb=172.16.42.1
 cable() { [ -n "$(ip -o -4 addr show to 172.16.42.0/24 2> /dev/null)" ]; }
 lines() { [ -f "$1" ] && wc -l < "$1" || echo 0; }
 # Each session's ssh, by what it runs on the Glass.
-declare -A mark=([stream]='pidof ffmpeg glass-fb' [sound]='glass-audio play' [volume]='glass-audio control' [tap]='/usr/local/bin/glass-tap' [camera]='/usr/local/bin/glass-camera')
+declare -A mark=([stream]='pidof glass-decode ffmpeg glass-fb' [sound]='glass-audio play' [volume]='glass-audio control' [tap]='/usr/local/bin/glass-tap' [camera]='/usr/local/bin/glass-camera')
 declare -A logf=([stream]=glass-viewd [sound]=glass-audio [volume]=glass-audio [tap]=glass-tap [camera]=glass-camera)
 declare -A fresh=([stream]='glass-fb: [0-9.]+ frames/s shown' [sound]='glass-play: .* Hz, target' [volume]='' [tap]='glass-tap: /dev/input' [camera]='glass-camera: [0-9]+ frames, [1-9]')
 session() {   # PART: "PID ADDRESS" of its ssh now, or nothing

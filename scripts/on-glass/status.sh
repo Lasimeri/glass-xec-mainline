@@ -40,7 +40,7 @@ row sound "${1:-earphone} at ${2:-50}%, $(v /etc/glass/audio-delay || echo 150) 
 
 # What runs: each part, up or not.
 up=""; down=""
-for x in glass-console glass-fb ffmpeg glass-play glass-tap tailscaled wpa_supplicant dropbear; do
+for x in glass-console glass-fb glass-decode ffmpeg glass-play glass-tap tailscaled wpa_supplicant dropbear; do
     if pidof "$x" > /dev/null; then up="$up $x"; else down="$down $x"; fi
 done
 row running "${up# }"

@@ -3,15 +3,16 @@
 #   glass-view.sh [OUTPUT] [FPS]     default: the primary output (kscreen
 #                                    priority 1, else DP-1), 24 frames/s
 #
-# Everything heavy happens on the desktop: the monitor comes as the
+# Nearly everything heavy happens on the desktop: the monitor comes as the
 # compositor's own screencast (the desktop portal's PipeWire stream, opened
 # by `desk cast` from ~/deskpilot: every frame KWin composes, no
 # screenshots), GStreamer uploads it to the GPU, scales it to 640x360 and
-# encodes H.264 with NVENC at BITRATE (default 3000 kbit/s), FPS frames/s.
+# encodes H.264 with NVENC at BITRATE (default 3000 kbit/s), FPS frames/s;
+# ffmpeg drives NVENC when the Glass decodes on its Ducati (the default, below).
 # The stream rides the ssh session to the Glass (encrypted, no listener on
 # either side; the desktop's firewall blocks inbound on the USB link
 # anyway), where a static ffmpeg in RAM (/tmp/ffmpeg, pushed from
-# dl/ffmpeg-arm if missing) decodes it into /dev/fb0. Measured 2026-10-07:
+# dl/ffmpeg-arm if missing) can decode it into /dev/fb0. Measured 2026-10-07:
 # the Glass decodes 640x360 H.264 at 65 frames/s on its two Cortex-A9
 # cores; raw frames would need 28 MB/s and the link carries 3.5.
 #
@@ -45,7 +46,10 @@ if [ $remote = 1 ]; then
     bitrate=${BITRATE:-1500}
     echo "glass-view: the Glass is reached over the tailnet ($GLASS_IP): $fps frames/s at $bitrate kbit/s, a deeper cushion" >&2
 else
-    bitrate=${BITRATE:-3000}
+    # 1500, not the 3000 of a cable: on Wi-Fi at -65 to -75 dBm the radio drops to 5.5
+    # Mbit/s and the stream stalls for seconds (2026-11-04); a still picture costs
+    # far less anyway. BITRATE=3000 for the old ceiling.
+    bitrate=${BITRATE:-1500}
 fi
 bitrate=${bitrate%k}
 # BUFFER_MS: a jitter buffer on the Glass for a link that jitters (Wi-Fi):
@@ -65,7 +69,7 @@ if gst-inspect-1.0 matroskamux > /dev/null 2>&1; then mux="matroskamux streamabl
 desk=${DESK:-$HOME/deskpilot/target/release/desk}
 [ -x "$desk" ] || { echo "glass-view: no desk tool at $desk (DESK=...; cargo build --release in ~/deskpilot)" >&2; exit 1; }
 command -v gst-launch-1.0 > /dev/null || { echo "glass-view: gst-launch-1.0 is not installed (gstreamer, gst-plugin-pipewire, gst-plugins-bad for nvcodec)" >&2; exit 1; }
-for e in pipewiresrc cudaupload cudaconvertscale nvh264enc h264parse mpegtsmux; do
+for e in pipewiresrc cudaupload cudadownload cudaconvertscale nvh264enc h264parse mpegtsmux; do
     gst-inspect-1.0 "$e" > /dev/null 2>&1 || { echo "glass-view: GStreamer element $e is missing" >&2; exit 1; }
 done
 # The monitor: as given, else the last one given (out/glass-output; the
@@ -140,8 +144,22 @@ if [ $remote = 1 ]; then cushion=${CUSHION:-$(( (fps * 250 + 500) / 1000 ))}; el
 # One stream at a time on the Glass: a session whose network went away (the
 # Glass moved between home and the hotspot) leaves its decoder blocked on a
 # dead connection, deaf to SIGTERM; it goes first, by force if it must.
-takeover='p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi;'
-if [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ]; then
+takeover='p=$(pidof glass-decode ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; i=0; while [ $i -lt 20 ]; do sleep 0.25; p=$(pidof glass-decode ffmpeg glass-fb); [ -z "$p" ] && break; i=$((i+1)); done; [ -z "$p" ] || kill -9 $p; fi;'
+# The decoder, by default the Ducati's (HW=0: ffmpeg on the A9 as before):
+# glass-decode (tools/glass-decode, docs/ducati-omx.md) gives glass-fb NV12.
+# On the Glass's side nothing else changes. `-V` answers only in a build that
+# decodes; a Glass not yet updated keeps the A9's decoder.
+hw=0
+if [ "${HW:-1}" = 1 ] && [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ] &&
+    "$top/scripts/glass" ssh '/usr/local/bin/glass-decode -V' < /dev/null > /dev/null 2>&1; then
+    hw=1
+fi
+if [ "$hw" = 1 ]; then
+    # -i 20: through a stall of the radio the picture stays; the console comes back at
+    # the end of the stream at once, and only after 20 s of silence otherwise.
+    sink="/usr/local/bin/glass-decode | /usr/local/bin/glass-fb -n -r $fps -b $cushion -i 20"
+    echo "glass-view: the Glass decodes on the Ducati (glass-decode) into its video overlay, on its vertical sync, $fps/s with $cushion frame(s) of cushion (glass-fb)" >&2
+elif [ "$has_fb" = 1 ] && [ "${YUV:-1}" = 1 ]; then
     sink="$decode -pix_fmt yuv420p -f rawvideo - | /usr/local/bin/glass-fb -y -r $fps -b $cushion"
     echo "glass-view: the Glass shows YUYV frames on its video overlay (converted by the display controller), on its vertical sync, $fps/s with $cushion frame(s) of cushion (glass-fb)" >&2
 elif [ "$has_fb" = 1 ]; then
@@ -152,7 +170,48 @@ else
     echo "glass-view: no glass-fb on the Glass: ffmpeg writes the visible page directly (no sync, no pacing)" >&2
 fi
 sink="$takeover $sink"
+# The encoder, for that decoder. glass-decode holds num_ref_frames pictures
+# (docs/ducati-omx.md, The hold): 262 ms at 12/s with nvh264enc, whose 3 no
+# property of it changes, 113 ms with ffmpeg's -dpb_size 1. So GStreamer stops at
+# NV12 in system memory (3.5 MB/s at 12/s) and ffmpeg's NVENC makes FLV,
+# each frame a whole tag with its size in front, released on arrival. One
+# slice: the Ducati does not need two. VBR with the bit rate as its ceiling, not
+# CBR: ffmpeg's CBR fills to the target with filler (3000 kbit/s on a picture
+# nvh264enc sends at 90, measured), all of it radio; VBR 91, PSNR within 2.5 dB.
+if [ "$hw" = 1 ]; then
+    gst_out=(cudadownload ! video/x-raw,format=NV12 ! fdsink fd=1 sync=false)
+    enc() {
+        exec ffmpeg -hide_banner -loglevel warning -nostdin -f rawvideo -pix_fmt nv12 -video_size "${W}x${H}" -framerate "$fps" -i pipe:0 -fps_mode passthrough \
+            -c:v h264_nvenc -preset p1 -tune ull -profile:v baseline -rc vbr -b:v "${bitrate}k" -maxrate "${bitrate}k" -bufsize "$((bitrate * 1000 / fps))" -g 2147483647 -bf 0 -zerolatency 1 -delay 0 -dpb_size 1 \
+            -f flv -flvflags no_duration_filesize -flush_packets 1 pipe:1
+    }
+else
+    gst_out=(nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size=-1 num-slices=2 zerolatency=true bframes=0 rc-lookahead=0
+        ! h264parse ! $mux ! fdsink fd=1 sync=false)
+    enc() { exec cat; }
+fi
 
+# A monitor, with the Ducati decoding: the one stream. Encoder, ssh, decoder and
+# display stay up, and only the capture behind them changes (`glass display
+# MONITOR`, a swipe on the touchpad): tools/glass-monitor, scripts/glass-capture.sh.
+# The monitor is chosen by name; the portal's remembered permission below cannot
+# do that, it restores whichever monitor was picked in its dialog.
+case "$out" in
+    window | follow | tracker) ;;
+    *)
+        if [ "$hw" = 1 ]; then
+            mon=$top/build/glass-monitor
+            if [ ! -x "$mon" ] || [ "$top/tools/glass-monitor/glass-monitor.c" -nt "$mon" ]; then
+                mkdir -p "$top/build"
+                gcc -O2 -o "$mon" "$top/tools/glass-monitor/glass-monitor.c" || exit 1
+            fi
+            echo "glass-view: $out, by name from KWin, NVENC H.264 up to $bitrate kbit/s, $fps frames/s -> Glass over ssh; a swipe or glass display changes the monitor" >&2
+            "$mon" "$W" "$H" "$fps" "$out" "${XDG_RUNTIME_DIR:-/tmp}/glass-monitor.ctl" "$top/scripts/glass-capture.sh" \
+                | enc | "$top/scripts/glass" ssh "$sink"
+            exit
+        fi
+        ;;
+esac
 # OUTPUT "follow": pixel perfect. A 640x360 window of the primary monitor,
 # one pixel to one pixel, that follows the pointer (desk cursor, through a
 # KWin script) and pans when the pointer nears its edge: the glasses show
@@ -182,8 +241,8 @@ if [ "$out" = follow ]; then
     view=${VIEW:-${W}x${H}}
     vw=${view%x*}; vh=${view#*x}
     echo "glass-view: $out -> a ${vw}x${vh} window following the pointer, shown at ${W}x${H} ($((vw / W)):1), NVENC H.264 ${bitrate} kbit/s, $fps frames/s -> Glass over ssh; Ctrl-C stops" >&2
-    "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$vw" "$vh" "$fps" "$bitrate" "$fifo" \
-        | "$top/scripts/glass" ssh "$sink"
+    GLASS_VIEWPORT_RAW=$hw "$desk" cast -- "$vp" @FD@ @NODE@ "$ow" "$oh" "$ox" "$oy" "$vw" "$vh" "$fps" "$bitrate" "$fifo" \
+        | enc | "$top/scripts/glass" ssh "$sink"
     exit
 fi
 # One rate stage, on the GPU: the capture asks KWin for at most SRC_FPS
@@ -269,6 +328,5 @@ fi
     ! cudacompositor latency=0 sink_0::xpos=0 sink_0::ypos=0 sink_0::width="$W" sink_0::height="$H" \
     ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,framerate=$fps/1" \
     ! cudaconvertscale ! "video/x-raw(memory:CUDAMemory),width=$W,height=$H,format=NV12" \
-    ! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate="$bitrate" vbv-buffer-size=$((bitrate / fps)) gop-size=-1 num-slices=2 zerolatency=true bframes=0 rc-lookahead=0 \
-    ! h264parse ! $mux ! fdsink fd=1 sync=false \
-    | "$top/scripts/glass" ssh "$sink"
+    ! "${gst_out[@]}" \
+    | enc | "$top/scripts/glass" ssh "$sink"

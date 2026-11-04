@@ -15,8 +15,10 @@
 #     it moves to Wi-Fi while the cable is still in and pulling it later
 #     costs nothing;
 #   - over the tailnet: ends when home Wi-Fi or the USB link answers;
-#   - over home Wi-Fi: ends when ADDRESS misses two pings in a row (the
-#     Glass left), sooner than ssh's own keepalive.
+#   - over home Wi-Fi: ends when ADDRESS misses GLASS_GUARD_MISSES pings in a row
+#     (default 2, 3 s apart; the Glass left), sooner than ssh's own keepalive. The
+#     monitor stream sets 5: TCP rides through a stall of the radio by itself, and
+#     a restart costs more than the stall.
 # Ends by itself with the session. Used by glass-viewd.sh, glass-audio.sh,
 # glass-tap.sh and glass-camera.sh.
 set -u
@@ -56,7 +58,7 @@ while kill -0 -- "$target" 2> /dev/null; do
         miss=0
     else
         miss=$((miss + 1))
-        if [ $miss -ge 2 ]; then why="$addr stopped answering"; break; fi
+        if [ $miss -ge "${GLASS_GUARD_MISSES:-2}" ]; then why="$addr stopped answering"; break; fi
     fi
 done
 if [ -n "$why" ]; then

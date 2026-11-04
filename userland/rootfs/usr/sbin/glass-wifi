@@ -326,6 +326,9 @@ case "${1:-}" in
             exit 0
         fi
         [ "${2:-}" = CONNECTED ] || exit 0
+        # One access point in reach, and the firmware off its channel every 10 s
+        # looking for another once the signal is under -75 dBm: tools/glass-wl.
+        { [ -x /usr/local/bin/glass-wl ] && /usr/local/bin/glass-wl roam-trigger -90; } > /dev/null 2>&1 || true
         mkdir -p /run/glass
         ssid=$(wpa_cli -i "$1" status 2> /dev/null | sed -n 's/^ssid=//p')
         last=$(cat /run/glass/wifi-ssid 2> /dev/null || true)

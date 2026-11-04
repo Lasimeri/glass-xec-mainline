@@ -22,7 +22,7 @@ The Glass runs Alpine Linux on Google's own kernel (XE24, 3.4). It shows the des
 | supervisor | what it does |
 | --- | --- |
 | `glass-viewd.sh` | waits for the Glass, opens a terminal with a shell on it, streams the monitor at 12 frames/s; restarts the stream when the Glass returns |
-| `glass-audio.sh` | while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice (079's speech, the echo canceller's playback) to it; when the Glass is gone, back to the stereo. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
+| `glass-audio.sh` | **Disabled 2026-11-04 by the user: no desktop sound to the Glass; `setup-desktop` no longer enables it.** while the Glass is connected, makes the "Google Glass" sound output the default and moves the application streams and the voice output to it; when the Glass is gone, back to the desktop's own output. A change of path (the cable out, Wi-Fi back) keeps the sound on the Glass. 32 kHz mono, raw at home and Opus at 48 kbit/s over the tailnet. The microphone loopbacks stay where they are aimed. `glass audio` switches by hand (below) |
 | `glass-tap.sh` | a tap on the touchpad toggles the voice mute, the microphone (`ptt079 --toggle`); a two-finger tap turns the stream (the chosen display source) and the Glass's display on or off together (`glass camera-display toggle`: the display going dark or lit is the answer); a swipe forward or back goes to the next or the previous display source (`glass display next|prev`) |
 | `glass-camera.sh` | the camera window below, waiting for the Glass whenever it is away; a window closed or crashed is opened again by its service (to keep it closed for a while: `systemctl --user stop glass-camera`) |
 | `glass-display.service` | the Glass's own screen (its console, status lines and battery) in a window, "Glass display": `glass-fbgrab` on the Glass sends only the rows that changed every 250 ms (nothing while the screen is still), `out/glass-fbview` here keeps the picture; restarted 5 s after any exit |
@@ -62,10 +62,17 @@ terminal, a list from the launcher's "Glass display" entry), or by name:
 | `console` | its own shell |
 | `off` | nothing, the display dark |
 
-A **swipe** along the touchpad goes to the next source forward (camera,
-camera alone, each monitor, follow, console) and to the one before going
-back; a desktop notification names it (which way is forward: `glass
-swipe-forward + or -`, the sign of the travel glass-tap logs); `glass display status` says which is chosen. Only the chosen source's
+A **swipe** along the touchpad, one finger or two, a twelfth of its length or more (114 units),
+goes to the next monitor forward, left to right,
+and to the one before going back; a desktop notification names it (which way is
+forward: `glass swipe-forward + or -`, the sign of the travel glass-tap logs);
+`glass display status` says which is chosen. The other sources are chosen by name
+or from the menu. Changing monitor restarts nothing: encoder, ssh, decoder and
+display stay up (`tools/glass-monitor`), the new monitor's capture starts beside
+the old one and takes over at its first whole frame, 282 to 369 ms after the gate
+gets the request (measured 2026-11-04). A capture that dies is started again a second later,
+the last picture held. Monitors come by name from KWin (`desk cast --output`), no
+dialog. Only the chosen source's
 feed runs: choosing another stops the camera window, the monitor stream,
 the local camera or the Glass screen, so nothing streams that is not shown.
 The choice is kept (out/glass-source). A **two-finger tap** turns the

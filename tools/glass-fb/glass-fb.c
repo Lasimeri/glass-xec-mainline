@@ -5,7 +5,8 @@
  *   ffmpeg ... -f rawvideo -pix_fmt yuv420p - | glass-fb -y [-r FPS] [-b N]
  *       (-y: I420 in, packed to YUYV for the video overlay, which converts to RGB)
  *   glass-camera -y -w 640 -h 360 | glass-fb -n [-r FPS]
- *       (-n: NV12 in, as the camera gives it: the camera on the Glass's own screen)
+ *   glass-decode | glass-fb -n [-r FPS] [-b N]
+ *       (-n: NV12 in, as the camera and the Ducati's decoder give it)
  *
  * The framebuffer (omapfb, 640x360, 32 bits) holds three pages: a frame is
  * written into a page not on screen, the display controller is pointed at
@@ -22,7 +23,7 @@
  *
  * The console underneath (glass-console, a shell on page 0 of /dev/fb0) is
  * the idle picture: with -y the overlay is switched on only once the first
- * frame is in it, off again when no frame came for IDLE_S seconds (the
+ * frame is in it, off again when no frame came for IDLE_S (or -i) seconds (the
  * stream stopped or stalled) and at the end, also on SIGTERM, SIGINT and
  * SIGHUP; without -y the frames use pages 1 and 2 and page 0 is put back.
  * So no old picture stays on the glasses when the stream stops. While
@@ -77,7 +78,8 @@ static unsigned ba0 = DISPC_GFX_BA0, ba1 = DISPC_GFX_BA1;
 #define DISPC_GO_LCD2 0x20
 static volatile uint32_t *dispc, *dmap;
 static unsigned long smem;
-#define IDLE_S 2
+#define IDLE_S 2      /* -i: another; the monitor stream holds its picture through a stall of the radio */
+static int idle_s = IDLE_S;
 
 static int fb, pages, use_omap = -1;
 static int first_page;               /* 1 without -y: page 0 is the console's */
@@ -418,11 +420,11 @@ static int wait_frame(void) {
     while (count == 0 && !eof) {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        ts.tv_sec += IDLE_S;
+        ts.tv_sec += idle_s;
         if (pthread_cond_timedwait(&cv, &mu, &ts) == ETIMEDOUT && count == 0 && !eof && (plane_on || shown != 0)) {
             console();
             idle_reset = 1;
-            fprintf(stderr, "glass-fb: no frame for %d s: the console is on screen until frames come\n", IDLE_S);
+            fprintf(stderr, "glass-fb: no frame for %d s: the console is on screen until frames come\n", idle_s);
         }
     }
     return count == 0 ? -1 : 0;
@@ -438,6 +440,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) cushion = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-y")) { yuv = 1; dev = "/dev/fb1"; }
         else if (!strcmp(argv[i], "-n")) { yuv = 1; nv12 = 1; dev = "/dev/fb1"; }
+        else if (!strcmp(argv[i], "-i") && i + 1 < argc) idle_s = atoi(argv[++i]);
         else dev = argv[i];
     }
     if (cushion < 1) cushion = 1;

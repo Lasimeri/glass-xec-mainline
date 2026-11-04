@@ -7,7 +7,7 @@
 #   glass-mirror.sh [TRANSCRIPT.jsonl]     default: the newest in the project
 #   scripts/glass-screen.sh run konsole -e scripts/glass-mirror.sh
 set -u
-dir=$HOME/.claude/projects/-home-lasimeri
+dir=$HOME/.claude/projects/$(printf %s "$HOME" | tr / -)
 f=${1:-}
 if [ -z "$f" ]; then
     f=$(ls -t "$dir"/*.jsonl 2> /dev/null | head -n 1)

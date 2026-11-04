@@ -37,7 +37,7 @@ while :; do
         GLASS_IP=$addr BUFFER_MS=0 "$top/scripts/glass-view.sh" "" 12 >> "$log" 2>&1 9>&- &
         view=$!
         set +m
-        "$top/scripts/glass-pathguard.sh" "$addr" "-$view" >> "$log" 2>&1 9>&- &
+        GLASS_GUARD_MISSES=5 "$top/scripts/glass-pathguard.sh" "$addr" "-$view" >> "$log" 2>&1 9>&- &
         guard=$!
         wait $view
         kill $guard 2> /dev/null
@@ -45,7 +45,7 @@ while :; do
         # The decoder on the Glass, if the session died under it: ffmpeg
         # first, so glass-fb sees the end of its input and puts the console
         # back (it also does on SIGTERM).
-        "$top/scripts/glass" ssh 'for p in $(pidof ffmpeg); do kill $p; done; sleep 1; for p in $(pidof glass-fb); do kill $p; done; true' < /dev/null > /dev/null 2>&1
+        "$top/scripts/glass" ssh 'for p in $(pidof glass-decode ffmpeg); do kill $p; done; sleep 1; for p in $(pidof glass-fb); do kill $p; done; true' < /dev/null > /dev/null 2>&1
     fi
     sleep 2
 done

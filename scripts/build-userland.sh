@@ -114,8 +114,9 @@ if [ "$what" = rootfs ] || [ "$what" = all ]; then
     # alsa-lib: its time64 calls do not exist there).
     # glass-camera (tools/glass-camera): the camera and the H.264 encoder on
     # the Ducati, spoken to over rpmsg (docs/ducati-omx.md); built with the
-    # OMX headers in tools/glass-camera/omx.
-    for t in glass-fb glass-tap glass-console glass-play glass-camera; do
+    # OMX headers in tools/glass-camera/omx. glass-decode (tools/glass-decode):
+    # the desktop stream decoded on the Ducati, the same way.
+    for t in glass-fb glass-tap glass-console glass-play glass-camera glass-decode glass-wl; do
         if [ -f "$top/out/$t" ]; then
             mkdir -p "$r/usr/local/bin" "$r/usr/local/src"
             cp "$top/out/$t" "$r/usr/local/bin/$t"

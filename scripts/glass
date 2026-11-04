@@ -377,10 +377,11 @@ case "$verb" in
         cp -a userland/initramfs/. "$stage/"
         cp -a userland/rootfs/. "$stage/"
         mkdir -p "$stage/usr/local/src" "$stage/usr/share/glass"
-        for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-fbgrab; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
+        for t in glass-fb glass-tap glass-touch glass-console glass-play glass-camera glass-decode glass-fbgrab glass-wl; do cp "tools/$t/$t.c" "$stage/usr/local/src/"; done
         cp -a tools/glass-camera/omx "$stage/usr/local/src/"   # the OMX headers glass-camera is built with
         font=/usr/share/kbd/consolefonts/Lat2-Terminus16.psfu.gz
         if [ -f "$font" ]; then gzip -dc "$font" > "$stage/usr/share/glass/console.psf"; else say "no $font (kbd): the console font is not sent"; fi
+        mkdir -p "$stage/etc/glass"; printf '%s\n' "$USER" > "$stage/etc/glass/desktop-user"   # who glass-term logs in as
         cp scripts/on-glass/update.sh "$stage/.update.sh"
         tar -C "$stage" -cf - . | ssh_glass 'rm -rf /tmp/glass-update && mkdir -p /tmp/glass-update && tar -C /tmp/glass-update -xf -' ||
             die "the files did not reach the Glass"
@@ -439,10 +440,12 @@ case "$verb" in
             done
         done
         systemctl --user daemon-reload
-        # Always on: the sound, the gestures, and the
-        # source at login, which turns on the camera window or the monitor
-        # stream when it is the one chosen (only the chosen feed runs).
-        systemctl --user enable --now glass-audio.service glass-tap.service glass-source.service 2>&1 | grep -v "^Created symlink" >&2 || true
+        # Always on: the gestures, and the source at login, which turns on the
+        # camera window or the monitor stream when it is the one chosen (only
+        # the chosen feed runs). The sound (glass-audio.service) is written but
+        # not enabled (the user, 2026-11-04: no desktop audio to the Glass; it
+        # held the radio awake at 613 kbit/s).
+        systemctl --user enable --now glass-tap.service glass-source.service 2>&1 | grep -v "^Created symlink" >&2 || true
         # The Glass's screen in a window here (glass-display.service) is written
         # but not enabled (the person, 2026-10-08: no framebuffer stream to the
         # PC); systemctl --user start glass-display shows it once.
@@ -767,10 +770,10 @@ case "$verb" in
         #   console       the Glass's own console
         #   off           the display dark, every stream to it stopped
         # Alone: a menu (fzf in a terminal; kdialog from the launcher entry that
-        # setup-desktop writes). `next` goes to the following source, skipping
-        # window and off (a two-finger tap on the touchpad, glass-tap.sh), and
-        # says so on the desktop. The heads-up display yields to any other choice
-        # (glass-camera.sh reads out/glass-source).
+        # setup-desktop writes). `next` and `prev` (a swipe on the touchpad, glass-tap.sh)
+        # go through the monitors only, left to right, and say so on the desktop; the
+        # other sources by name or from the menu. The heads-up display yields to any
+        # other choice (glass-camera.sh reads out/glass-source).
         panel=/sys/devices/platform/omapdss/manager2/panel-notle-dpi/enabled
         srcf=$top/out/glass-source
         desk=${DESK:-$HOME/deskpilot/target/release/desk}
@@ -805,7 +808,8 @@ case "$verb" in
                 want=${current:-camera}
                 ;;
             next | prev)
-                cycle=$(for s in $sources; do case "$s" in window | off) ;; *) echo "$s" ;; esac; done)
+                [ -n "$monitors" ] || die "no monitors (desk outputs)"
+                cycle=$monitors
                 [ "$want" = prev ] && cycle=$(echo "$cycle" | tac)
                 want=$(echo "$cycle" | awk -v c="$current" 'NR == 1 { f = $0 } p { print; done = 1; exit } $0 == c { p = 1 } END { if (!done) print f }')
                 ;;
@@ -824,6 +828,24 @@ case "$verb" in
                 ;;
         esac
         case " $sources " in *" $want "*) ;; *) die "no display source '$want' (one of: $sources)" ;; esac
+        # Another monitor while the monitor stream runs: nothing stops, the capture
+        # behind the stream changes (tools/glass-monitor). No reader on the FIFO (a
+        # stream of the older kind, or none): the write times out and the source
+        # starts the long way below.
+        ctl=${XDG_RUNTIME_DIR:-/tmp}/glass-monitor.ctl
+        case " $(echo $monitors) " in
+            *" $want "*)
+                if [ -p "$ctl" ] && systemctl --user is-active --quiet glass-viewd.service &&
+                    timeout 1 sh -c 'echo "$0" > "$1"' "$want" "$ctl"; then
+                    echo "$want" > "$srcf"
+                    echo "$want" > "$top/out/glass-output"
+                    msg="the Glass shows: $(label "$want")"
+                    say "$msg"
+                    command -v notify-send > /dev/null && notify-send -a Glass -i video-display "Glass display" "$msg" 2> /dev/null || true
+                    exit 0
+                fi
+                ;;
+        esac
         lit=$(ssh_glass "cat $panel" < /dev/null 2> /dev/null) || die "the Glass does not answer at $GLASS_IP"
         # On the Glass: the local camera view (glass-camera -y, matched by its
         # arguments in /proc: a pkill -f pattern also matches this session's
@@ -843,7 +865,7 @@ case "$verb" in
         if [ "$want" != window ]; then
             "$top/scripts/glass-screen.sh" stop > /dev/null 2>&1 || true
         fi
-        quiet='for p in $(pidof glass-camera); do tr "\0" " " < /proc/$p/cmdline | grep -q " -y" && kill $p; done; p=$(pidof ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; sleep 1; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill -9 $p; fi; true'
+        quiet='for p in $(pidof glass-camera); do tr "\0" " " < /proc/$p/cmdline | grep -q " -y" && kill $p; done; p=$(pidof glass-decode ffmpeg glass-fb); if [ -n "$p" ]; then kill $p; i=0; while [ $i -lt 20 ]; do sleep 0.25; p=$(pidof glass-decode ffmpeg glass-fb); [ -z "$p" ] && break; i=$((i+1)); done; [ -z "$p" ] || kill -9 $p; fi; true'
         systemctl --user is-active --quiet glass-camera.service || quiet="pkill -x glass-camera; $quiet"
         # The choice kept on the Glass too (/etc/glass/display-source), first,
         # so the local camera's supervisor (glass-localcam) does not start its
@@ -916,7 +938,7 @@ case "$verb" in
                     ;;
                 off)
                     systemctl --user stop glass-viewd.service glass-camera.service 2> /dev/null || true
-                    [ -n "$lit" ] && ssh_glass 'mkdir -p /etc/glass; echo off > /etc/glass/display-source; /usr/sbin/glass-localcam stop 2> /dev/null; pkill -x glass-camera; p=$(pidof ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
+                    [ -n "$lit" ] && ssh_glass 'mkdir -p /etc/glass; echo off > /etc/glass/display-source; /usr/sbin/glass-localcam stop 2> /dev/null; pkill -x glass-camera; p=$(pidof glass-decode ffmpeg glass-fb); [ -z "$p" ] || kill $p; echo 1 > /sys/class/graphics/fb0/blank; true' < /dev/null
                     say "display off (glass display: $chosen comes back on the next two-finger tap)"
                     exit 0
                     ;;

@@ -22,6 +22,8 @@
  * frame held back and a buffer of one frame; Matroska when its muxer is
  * installed (each frame carries its size, so the receiver releases it at
  * once), else MPEG-TS (a frame released when the next begins); stdout.
+ * With GLASS_VIEWPORT_RAW=1 the chain ends at NV12 in system memory instead,
+ * for ffmpeg's NVENC (hardware decode on the Glass: scripts/glass-view.sh).
  */
 #include <gst/gst.h>
 #include <pthread.h>
@@ -86,6 +88,15 @@ int main(int argc, char **argv) {
     const char *mux = mk ? "matroskamux streamable=true" : "mpegtsmux";
     if (mk) gst_object_unref(mk);
 
+    char tail[512];
+    const char *raw = getenv("GLASS_VIEWPORT_RAW");
+    if (raw && !strcmp(raw, "1"))
+        snprintf(tail, sizeof tail, "cudadownload ! video/x-raw,format=NV12 ! fdsink fd=1 sync=false");
+    else
+        snprintf(tail, sizeof tail,
+            "nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d vbv-buffer-size=%d gop-size=-1 num-slices=2 zerolatency=true bframes=0 rc-lookahead=0 "
+            "! h264parse ! %s ! fdsink fd=1 sync=false", kbit, kbit / fps, mux);
+
     char desc[2048];
     snprintf(desc, sizeof desc,
         "pipewiresrc fd=%s path=%s do-timestamp=true keepalive-time=%d ! video/x-raw,max-framerate=%d/1 "
@@ -93,9 +104,8 @@ int main(int argc, char **argv) {
         "! cudaupload ! cudacompositor name=vp latency=0 sink_0::xpos=%d sink_0::ypos=%d sink_0::width=%d sink_0::height=%d "
         "! video/x-raw(memory:CUDAMemory),width=%d,height=%d,framerate=%d/1 "
         "! cudaconvertscale ! video/x-raw(memory:CUDAMemory),width=%d,height=%d,format=NV12 "
-        "! nvh264enc preset=p1 tune=ultra-low-latency rc-mode=cbr bitrate=%d vbv-buffer-size=%d gop-size=-1 num-slices=2 zerolatency=true bframes=0 rc-lookahead=0 "
-        "! h264parse ! %s ! fdsink fd=1 sync=false",
-        fd, node, 1000 / fps, fps + fps / 4, -vx, -vy, outw, outh, W, H, fps, GW, GH, kbit, kbit / fps, mux);
+        "! %s",
+        fd, node, 1000 / fps, fps + fps / 4, -vx, -vy, outw, outh, W, H, fps, GW, GH, tail);
     GError *err = NULL;
     pipeline = gst_parse_launch(desc, &err);
     if (!pipeline || err) { fprintf(stderr, "glass-viewport: %s\n", err ? err->message : "no pipeline"); return 1; }

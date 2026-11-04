@@ -1,12 +1,16 @@
 /* glass-decode: H.264 decoded on the Ducati (OMX.TI.DUCATI1.VIDEO.DECODER,
  * role video_decoder.avc: H264D in Google's firmware), not on the
- * A9: the heads-up display's picture from the desktop, at a few percent of
- * a core where ffmpeg's software decoder took 15 % of both (2026-10-07).
+ * A9: the monitor stream from the desktop (scripts/glass-view.sh), 9.5 % of the
+ * CPU where ffmpeg took 19.9 % on the same stream (2026-11-04, one window each).
  *
  *   glass-decode [-w W] [-h H] < video.flv > frames.nv12
  *
- * NOT WORKING YET: every frame fails after the decoder's first port
- * reconfiguration (docs/ducati-omx.md, The decoder); kept for the next try.
+ * Bit-exact against ffmpeg since 2026-11-04 (docs/ducati-omx.md, The decoder).
+ *
+ * The decoder holds num_ref_frames pictures before it lets one out, however
+ * the stream declares its reordering: at 12 frames/s 262 ms with NVENC's
+ * default of 3, 113 ms with one. So the sender uses one (h264_nvenc
+ * -dpb_size 1, scripts/glass-view.sh); see docs/ducati-omx.md, The hold.
  *
  * Input: FLV with H.264 (ffmpeg -f flv), because each FLV tag is a whole
  * frame with its length up front: a frame goes to the decoder the moment
@@ -27,6 +31,32 @@
 #define DOMX_PROG "glass-decode"
 #include "domx.h"
 
+/* The bitstream's memory. TI's proxy on ION builds gives every non-2D port a
+ * buffer from the carveout heap (omx_proxy_common.c,
+ * PROXY_AllocateBufferIonCarveout: heap mask 1 << 2, secure_input despite the
+ * name), which the Ducati sees through its IOBUFS mapping (da 0x88000000).
+ * TILER 1D was the proxy's older, non-ION branch; GLASS_DECODE_INPUT=tiler
+ * keeps it for comparison. */
+struct k_ion_alloc { uint32_t len, align, flags, handle; };
+_Static_assert(sizeof(struct k_ion_alloc) == 16, "struct ion_allocation_data is 16 bytes");
+#define ION_IOC_ALLOC _IOWR('I', 0, struct k_ion_alloc)
+#define ION_HEAP_MASK_CARVEOUT (1u << 2)
+static int carveout(int ion, uint32_t len, struct tb *t) {
+    memset(t, 0, sizeof *t);
+    t->share = -1;
+    t->size = (len + 4095) & ~4095u;
+    struct k_ion_alloc a = { .len = t->size, .align = 0x1000, .flags = ION_HEAP_MASK_CARVEOUT };
+    if (ioctl(ion, ION_IOC_ALLOC, &a) < 0) { perror(DOMX_PROG ": ION carveout"); return -1; }
+    t->ion = a.handle;
+    struct k_ion_fd s = { .handle = t->ion };
+    if (ioctl(ion, ION_IOC_SHARE, &s) < 0) { perror(DOMX_PROG ": ION share"); return -1; }
+    t->share = s.fd;
+    t->map = mmap(NULL, t->size, PROT_READ | PROT_WRITE, MAP_SHARED, t->share, 0);
+    if (t->map == MAP_FAILED) { t->map = NULL; perror(DOMX_PROG ": mmap"); return -1; }
+    return 0;
+}
+
+#define GLASS_INDEX_ENHANCED_PORT_RECONFIG ((OMX_INDEXTYPE) 0x7F00007D)
 #define PORT_IN 0
 #define PORT_OUT 1
 #define FLAG_EOF 0x10                 /* OMX_BUFFERFLAG_ENDOFFRAME */
@@ -40,7 +70,7 @@ static int ion = -1;
 static unsigned W = 640, H = 360;
 static int probe;                   /* -i: what the decoder asks, nothing decoded */
 
-/* Bitstream buffers (TILER 1D) and their state. */
+/* Bitstream buffers (carveout, see above) and their state. */
 struct inbuf { struct tb b; uint32_t h; struct hdr hd; int busy; };
 static struct inbuf in[NIN];
 /* Picture buffers (TILER 2D NV12: Y 8-bit, UV 16-bit). */
@@ -51,6 +81,19 @@ static OMX_PARAM_PORTDEFINITIONTYPE pin, pout;
 static pthread_mutex_t inmu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t incv = PTHREAD_COND_INITIALIZER;
 static unsigned long frames_in, frames_out;
+/* When each frame went in, for the delay of each picture out: pictures come
+ * out in the order frames went in (the streams here have no reordering). */
+#define LAT_RING 256u
+static double t_in[LAT_RING];
+static double lat_sum, lat_max;
+static unsigned long lat_n;
+static pthread_t main_thread;
+static inline double mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double) t.tv_sec + (double) t.tv_nsec / 1e9; }
+/* Which side stalled, in the five-second line: the longest wait for the next
+ * frame from stdin (the link or the sender) and for a free bitstream buffer
+ * (the decoder). The decoder delay alone cannot say: it lets a picture out
+ * when the next frame arrives, so a gap in the link reads as a long delay. */
+static double gap_max, bufwait_max;
 static uint32_t crop_l, crop_t;       /* the picture's place in the padded buffer, when given */
 static int have_crop;
 static uint8_t cfg[1024];           /* the SPS and PPS, Annex-B */
@@ -59,6 +102,8 @@ static volatile int need_cfg;       /* set by a reconfiguration: send cfg again 
 static volatile int wait_key;       /* and drop frames until a key frame */
 static int gate_open = 1;           /* input may go to the decoder (under inmu) */
 static unsigned long handled, dropped;   /* port events answered; frames dropped waiting for a key frame */
+#define KEY_WAIT_S 5.0               /* a stream with no key frame coming: end, the sender starts again with one */
+static double key_wait_since;
 static void gate(int open) { pthread_mutex_lock(&inmu); gate_open = open; pthread_cond_broadcast(&incv); pthread_mutex_unlock(&inmu); }
 
 static void on_signal(int s) { (void) s; stop = 1; }
@@ -73,7 +118,7 @@ static void takeover(void) {
         struct dirent *e;
         while (d && (e = readdir(d))) {
             if (e->d_name[0] < '1' || e->d_name[0] > '9' || !strcmp(e->d_name, me)) continue;
-            char path[64], comm[32] = { 0 };
+            char path[sizeof e->d_name + 16], comm[32] = { 0 };
             snprintf(path, sizeof path, "/proc/%s/comm", e->d_name);
             int f = open(path, O_RDONLY);
             if (f < 0) continue;
@@ -279,11 +324,14 @@ static void *output(void *arg) {
             for (unsigned y = 0; y < H / 2; y++)
                 memcpy(pic + (size_t) W * H + (size_t) y * W, o->uv.map + (size_t) (row / 2 + y) * o->uv.stride + col, W);
             if (fwrite(pic, 1, fsize, stdout) != fsize || fflush(stdout)) { stop = 1; break; }
+            double held = mono() - t_in[frames_out & (LAT_RING - 1u)];
+            lat_sum += held; lat_n++; if (held > lat_max) lat_max = held;
             frames_out++;
         }
         if (!stop) { if (fill_this(&dec, &o->hd)) { stop = 1; break; } o->at_dec = 1; }
     }
     free(pic);
+    pthread_kill(main_thread, SIGTERM);   /* the input side may be asleep in read() on a dead link */
     pthread_mutex_lock(&inmu);
     pthread_cond_broadcast(&incv);
     pthread_mutex_unlock(&inmu);
@@ -325,6 +373,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-w") && i + 1 < argc) W = (unsigned) atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") && i + 1 < argc) H = (unsigned) atoi(argv[++i]);
         else if (!strcmp(argv[i], "-i")) probe = 1;
+        else if (!strcmp(argv[i], "-V")) { puts("glass-decode 2"); return 0; }   /* what scripts/glass-view.sh asks: this build decodes */
         else { fprintf(stderr, "glass-decode [-i] [-w W] [-h H] < video.flv > frames.nv12\n"); return 2; }
     }
     struct sigaction sa;
@@ -334,6 +383,7 @@ int main(int argc, char **argv) {
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
+    main_thread = pthread_self();
     takeover();
     ion = open("/dev/ion", O_RDWR);
     if (ion < 0) { perror("glass-decode: /dev/ion"); return 1; }
@@ -355,8 +405,19 @@ int main(int argc, char **argv) {
     er.nPortIndex = PORT_OUT;
     er.bUsePortReconfigForCrop = OMX_TRUE;
     er.bUsePortReconfigForPadding = OMX_TRUE;
-    if ((e0 = xparam(&dec, F_SET_PARAM, OMX_TI_IndexParamUseEnhancedPortReconfig, &er, -1)))
-        fprintf(stderr, "glass-decode: enhanced port reconfiguration: 0x%x (going on without)\n", e0);
+    /* Without this the decoder does not work at all, it is not an option: with
+     * bUsePortReconfigForPadding off, the firmware's output setup writes the
+     * chroma's size over the luma's descriptor (0x14093c, descs[0], not
+     * descs[1]), and H264D refuses every frame with extended error 0x4000,
+     * XDM_UNSUPPORTEDPARAM, 0 bytes consumed. The number is the firmware's,
+     * read from its SetParameter dispatch (0x177136); KitKat's header says
+     * 0x7F000072, which here is an unsupported index. */
+    _Static_assert(sizeof er == 20, "the firmware checks nSize == 20");
+    if ((e0 = xparam(&dec, F_SET_PARAM, GLASS_INDEX_ENHANCED_PORT_RECONFIG, &er, -1))) {
+        fprintf(stderr, "glass-decode: enhanced port reconfiguration refused: 0x%x\n", e0);
+        return 1;
+    }
+    fprintf(stderr, "glass-decode: enhanced port reconfiguration on\n");
 
     int rc = 1, idle = 0, exec = 0;
     uint32_t e;
@@ -377,9 +438,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "glass-decode: the decoder took %u input buffers of %u bytes\n", (unsigned) pin.nBufferCountActual, (unsigned) pin.nBufferSize);
         goto out;
     }
-    for (int i = 0; i < NIN; i++) {
-        if (tiler(ion, pin.nBufferSize, 1, TILFMT_PAGE, &in[i].b)) goto out;
-        if (!(in[i].h = reg(&dec, &in[i].b))) goto out;
+    {
+        const char *im = getenv("GLASS_DECODE_INPUT");
+        int use_tiler = im && !strcmp(im, "tiler");
+        fprintf(stderr, "glass-decode: bitstream buffers from %s\n", use_tiler ? "TILER 1D" : "the carveout");
+        for (int i = 0; i < NIN; i++) {
+            if (use_tiler ? tiler(ion, pin.nBufferSize, 1, TILFMT_PAGE, &in[i].b)
+                          : carveout(ion, pin.nBufferSize, &in[i].b)) goto out;
+            if (!(in[i].h = reg(&dec, &in[i].b))) goto out;
+        }
     }
     if (probe) {
         /* The output the decoder computes before any stream, then with the
@@ -435,6 +502,7 @@ int main(int argc, char **argv) {
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     double report = 5;
+    double last_arrived = 0;
     unsigned long last_out = 0;
     while (!stop) {
         uint8_t th[11];
@@ -443,8 +511,13 @@ int main(int argc, char **argv) {
         int64_t ts = (int64_t) ((uint32_t) th[7] << 24 | (uint32_t) th[4] << 16 | (uint32_t) th[5] << 8 | th[6]) * 1000;
         if (len > IN_SIZE - 64) { fprintf(stderr, "glass-decode: a %u-byte tag: too large\n", len); break; }
         if (read_full(tag, len) || read_full(fh, 4)) break;   /* the tag, then its PreviousTagSize */
+        double arrived = mono();
+        if (last_arrived > 0 && arrived - last_arrived > gap_max) gap_max = arrived - last_arrived;
+        last_arrived = arrived;
         if (th[0] != 9 || len < 5 || (tag[0] & 0x0f) != 7) continue;
         struct inbuf *b = free_in();
+        double got_buf = mono();
+        if (got_buf - arrived > bufwait_max) bufwait_max = got_buf - arrived;
         if (!b) break;
         uint8_t *o = b->b.map;
         uint32_t n = 0, flags = FLAG_EOF;
@@ -475,7 +548,21 @@ int main(int argc, char **argv) {
             /* After a reconfiguration (and at the start) nothing until a key
              * frame: a P frame whose reference went to the old codec fails. */
             if (wait_key) {
-                if ((tag[0] >> 4) != 1) { pthread_mutex_lock(&inmu); b->busy = 0; pthread_mutex_unlock(&inmu); dropped++; continue; }
+                if ((tag[0] >> 4) != 1) {
+                    pthread_mutex_lock(&inmu); b->busy = 0; pthread_mutex_unlock(&inmu);
+                    dropped++;
+                    /* The monitor stream has one key frame, at its start: nothing to
+                     * wait for after a reconfiguration in mid-stream. A picture frozen
+                     * for good would look like a working stream. */
+                    double now = mono();
+                    if (key_wait_since == 0) key_wait_since = now;
+                    if (now - key_wait_since > KEY_WAIT_S) {
+                        fprintf(stderr, "glass-decode: no key frame for %.0f s: ending, for the sender to start again\n", KEY_WAIT_S);
+                        stop = 1;
+                    }
+                    continue;
+                }
+                key_wait_since = 0;
                 wait_key = 0;
             }
             /* After the decoder rebuilt its codec (a port reconfiguration)
@@ -497,6 +584,7 @@ int main(int argc, char **argv) {
                 memcpy(o + n, "\0\0\0\1", 4); memcpy(o + n + 4, p, l);
                 n += 4 + l; p += l;
             }
+            t_in[frames_in & (LAT_RING - 1u)] = mono();
             frames_in++;
         }
         if (!n) { pthread_mutex_lock(&inmu); b->busy = 0; pthread_mutex_unlock(&inmu); continue; }
@@ -515,7 +603,9 @@ int main(int argc, char **argv) {
         clock_gettime(CLOCK_MONOTONIC, &t);
         double el = (double) (t.tv_sec - t0.tv_sec) + (double) (t.tv_nsec - t0.tv_nsec) / 1e9;
         if (el >= report) {
-            fprintf(stderr, "glass-decode: %lu frames in, %lu out, %.1f/s\n", frames_in, frames_out, (double) (frames_out - last_out) / 5.0);
+            fprintf(stderr, "glass-decode: %lu frames in, %lu out, %.1f/s, decoder delay %.1f ms mean, %.1f max, input gap %.0f ms, buffer wait %.0f ms\n", frames_in, frames_out,
+                    (double) (frames_out - last_out) / 5.0, lat_n ? lat_sum / (double) lat_n * 1e3 : 0.0, lat_max * 1e3, gap_max * 1e3, bufwait_max * 1e3);
+            lat_sum = lat_max = 0; lat_n = 0; gap_max = bufwait_max = 0;
             last_out = frames_out;
             report += 5;
         }
